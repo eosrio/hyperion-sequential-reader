@@ -16,13 +16,16 @@ export class HyperionSequentialReader {
     private allowedContracts: Map<string, ABI> = new Map();
     private deltaCollector?: (value) => void;
     private traceCollector?: (value) => void;
+    private startBlock: number;
 
     constructor(private shipUrl: string, options: {
-        poolSize: number
+        poolSize: number,
+        startBlock?: number
     }) {
         this.createWorkers({
             poolSize: options.poolSize || 1
         });
+        this.startBlock = options.startBlock || -1
     }
 
     start() {
@@ -67,7 +70,7 @@ export class HyperionSequentialReader {
         switch (result[0]) {
             case 'get_status_result_v0': {
                 const data = Serializer.objectify(result[1]) as any;
-                this.requestBlocks({from: data.head.block_num, to: 0xffffffff});
+                this.requestBlocks({from: this.startBlock > 0 ? this.startBlock : data.head.block_num, to: 0xffffffff});
                 this.shipInitStatus = data;
                 break;
             }
@@ -180,9 +183,9 @@ export class HyperionSequentialReader {
             })
         }
 
-        console.time('collectTraces');
+        //console.time('collectTraces');
         await this.collectTraces(actArray, expectedTraces);
-        console.timeEnd('collectTraces');
+        //console.timeEnd('collectTraces');
 
         // process deltas
         const deltaRows = [];
@@ -244,17 +247,19 @@ export class HyperionSequentialReader {
             contractRows: deltaRows
         });
 
+        /*
         console.log('--------------');
         const decodeTime = process.hrtime.bigint() - tRef;
         console.log('Total Processing Time:', Number(decodeTime) / 1000000, 'ms')
         console.log(`Block ${blockInfo.head.block_num} | TRX: ${transactions.length} | Action Traces: ${actArray.length} | Deltas: ${deltaRows.length}`);
         const relativeTimePerBlockData = (Number(decodeTime / BigInt(1000)) / (transactions.length + actArray.length + deltaRows.length)).toFixed(2);
         console.log('Relative Processing Speed:', relativeTimePerBlockData, 'us/object');
+         */
 
     }
 
     private async collectTraces(actArray: any[], expectedLength: number) {
-        console.log(`Waiting for ${expectedLength} traces to be collected...`);
+        //console.log(`Waiting for ${expectedLength} traces to be collected...`);
         await new Promise<void>((resolve) => {
             this.traceCollector = (value) => {
                 actArray.push(value.decodedAct);
@@ -264,7 +269,7 @@ export class HyperionSequentialReader {
             };
         });
         actArray.sort((a, b) => a.index - b.index);
-        console.log(actArray.map(a => a.index));
+        //console.log(actArray.map(a => a.index));
     }
 
     private async collectDeltas(deltaRows: any[], expectedLength: number) {

@@ -26,6 +26,20 @@ parentPort.on("message", value => {
                 present: data.present,
                 ...Serializer.objectify(deltaRow[1])
             };
+             if (contracts.has(decodedDeltaRow.code)) {
+                 const abi = contracts.get(decodedDeltaRow.code);
+                 if (abi) {
+                    try {
+                         // deserialize data
+                         const type = abi.tables.find(value => value.name === decodedDeltaRow.table).type;
+                         decodedDeltaRow.value = Serializer.decode({
+                             data: deltaRow[1].value.array, type, abi
+                         });
+                     } catch (e) {
+                         console.log(e.message, decodedDeltaRow);
+                     }
+                 }
+             }
             parentPort.postMessage({
                 event: 'decoded_delta',
                 wIndex: workerData.wIndex,
