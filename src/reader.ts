@@ -1,5 +1,5 @@
 import WebSocket, {RawData} from "ws";
-import {ABI, Serializer} from "@greymass/eosio";
+import {ABI, ABIDecoder, Serializer} from "@greymass/eosio";
 import {EventEmitter} from "events";
 import {Worker} from "worker_threads";
 import * as path from "path";
@@ -16,16 +16,19 @@ export class HyperionSequentialReader {
     private allowedContracts: Map<string, ABI> = new Map();
     private deltaCollector?: (value) => void;
     private traceCollector?: (value) => void;
-    private startBlock: number;
+    startBlock: number;
+    endBlock: number;
 
     constructor(private shipUrl: string, options: {
         poolSize: number,
-        startBlock?: number
+        startBlock?: number,
+        endBlock?: number
     }) {
         this.createWorkers({
             poolSize: options.poolSize || 1
         });
         this.startBlock = options.startBlock || -1
+        this.endBlock = options.endBlock || 0xffffffff
     }
 
     start() {
@@ -70,17 +73,23 @@ export class HyperionSequentialReader {
         switch (result[0]) {
             case 'get_status_result_v0': {
                 const data = Serializer.objectify(result[1]) as any;
-                this.requestBlocks({from: this.startBlock > 0 ? this.startBlock : data.head.block_num, to: 0xffffffff});
+                this.requestBlocks({
+                    from: this.startBlock > 0 ? this.startBlock : data.head.block_num,
+                    to: this.endBlock
+                });
                 this.shipInitStatus = data;
                 break;
             }
             case 'get_blocks_result_v0': {
-                await this.decodeShipData(result[1]);
+                try {
+                    await this.decodeShipData(result[1]);
+                } catch (e) {
+                    console.log('[decodeShipData]', e.message);
+                    console.log(e);
+                }
                 break;
             }
         }
-
-        this.ackBlockRange(1);
     }
 
     private loadShipAbi(data: RawData) {
@@ -111,9 +120,7 @@ export class HyperionSequentialReader {
     }
 
     private async decodeShipData(resultElement: any) {
-
-        const tRef = process.hrtime.bigint();
-
+        // const tRef = process.hrtime.bigint();
         const blockInfo = Serializer.objectify({
             head: resultElement.head,
             last_irreversible: resultElement.last_irreversible,
@@ -121,141 +128,137 @@ export class HyperionSequentialReader {
             prev_block: resultElement.prev_block
         });
 
-        // console.log(blockInfo);
+        if (resultElement.block && resultElement.traces && resultElement.deltas) {
 
-        const block = Serializer.decode({
-            type: 'signed_block',
-            data: resultElement.block.array as Uint8Array,
-            abi: this.shipAbi
-        }) as any;
+            const block = Serializer.decode({
+                type: 'signed_block',
+                data: resultElement.block.array as Uint8Array,
+                abi: this.shipAbi
+            }) as any;
 
-        const blockHeader = Serializer.objectify({
-            timestamp: block.timestamp,
-            producer: block.producer,
-            confirmed: block.confirmed,
-            previous: block.previous,
-            transaction_mroot: block.transaction_mroot,
-            action_mroot: block.action_mroot,
-            schedule_version: block.schedule_version,
-            new_producers: block.new_producers,
-            header_extensions: block.header_extensions,
-            producer_signature: block.producer_signature,
-            block_extensions: block.block_extensions,
-        });
+            const blockHeader = Serializer.objectify({
+                timestamp: block.timestamp,
+                producer: block.producer,
+                confirmed: block.confirmed,
+                previous: block.previous,
+                transaction_mroot: block.transaction_mroot,
+                action_mroot: block.action_mroot,
+                schedule_version: block.schedule_version,
+                new_producers: block.new_producers,
+                header_extensions: block.header_extensions,
+                producer_signature: block.producer_signature,
+                block_extensions: block.block_extensions,
+            });
 
-        const transactions = block.transactions as any[];
-
-        const traces = Serializer.decode({
-            type: 'transaction_trace[]',
-            data: resultElement.traces.array as Uint8Array,
-            abi: this.shipAbi
-        }) as any[];
-
-        const deltas = Serializer.decode({
-            type: 'table_delta[]',
-            data: resultElement.deltas.array as Uint8Array,
-            abi: this.shipAbi
-        }) as any[];
-
-        // process traces
-        const actArray = [];
-        let expectedTraces = 0;
-        for (let trace of traces) {
-            let j = 0;
-            trace[1].action_traces.forEach((actionTrace: any, index: number) => {
-                const act = Serializer.objectify(actionTrace[1].act);
-                act.data = null;
-                if (this.allowedContracts.has(act.account)) {
-                    expectedTraces++;
-                    this.dsPool[j].postMessage({
-                        event: 'action',
-                        data: {
-                            index,
-                            act,
-                            serializedData: actionTrace[1].act.data.array
+            const transactions = block.transactions as any[];
+            const traces = Serializer.decode({
+                type: 'transaction_trace[]',
+                data: resultElement.traces.array as Uint8Array,
+                abi: this.shipAbi
+            }) as any[];
+            const deltas = Serializer.decode({
+                type: 'table_delta[]',
+                data: resultElement.deltas.array as Uint8Array,
+                abi: this.shipAbi
+            }) as any[];
+            const promises = [];
+            // process deltas
+            const deltaRows = [];
+            for (let delta of deltas) {
+                // make sure the ABI for the watched contracts is updated before other processing is done
+                if (delta[1].name === 'account') {
+                    const abiRows = delta[1].rows.map(r => {
+                        if (r.present && r.data.array) {
+                            const decodedRow = Serializer.decode({
+                                type: 'account',
+                                data: r.data.array,
+                                abi: this.shipAbi
+                            });
+                            if (decodedRow[1].abi) {
+                                return Serializer.objectify(decodedRow[1]);
+                            }
+                        }
+                        return null;
+                    }).filter(r => r !== null);
+                    abiRows.forEach((abiRow) => {
+                        if (this.allowedContracts.has(abiRow.name)) {
+                            console.time('abiDecoding');
+                            console.log(abiRow.name, abiRow.creation_date);
+                            const abiBin = new Uint8Array(Buffer.from(abiRow.abi, 'hex'));
+                            const abi = ABI.fromABI(new ABIDecoder(abiBin));
+                            this.addContract(abiRow.name, abi);
+                            console.timeEnd('abiDecoding');
                         }
                     });
-                    j++;
-                    if (j > this.dsPool.length - 1) {
-                        j = 0;
-                    }
                 }
-            })
-        }
 
-        //console.time('collectTraces');
-        await this.collectTraces(actArray, expectedTraces);
-        //console.timeEnd('collectTraces');
-
-        // process deltas
-        const deltaRows = [];
-        for (let delta of deltas) {
-            if (delta[1].name === 'contract_row') {
-                let j = 0;
-                delta[1].rows.forEach((row: any, index: number) => {
-                    this.dsPool[j].postMessage({
-                        event: 'delta',
-                        data: {
-                            index,
-                            present: row.present,
-                            data: row.data.array
+                if (delta[1].name === 'contract_row') {
+                    let j = 0;
+                    delta[1].rows.forEach((row: any, index: number) => {
+                        this.dsPool[j].postMessage({
+                            event: 'delta',
+                            data: {
+                                index,
+                                present: row.present,
+                                data: row.data.array
+                            }
+                        });
+                        j++;
+                        if (j > this.dsPool.length - 1) {
+                            j = 0;
                         }
                     });
-                    j++;
-                    if (j > this.dsPool.length - 1) {
-                        j = 0;
-                    }
-
-                    // const deltaRow = Serializer.decode({
-                    //     data: row.data,
-                    //     type: 'contract_row',
-                    //     abi: this.shipAbi
-                    // });
-                    // const decodedDeltaRow = {
-                    //     present: row.present,
-                    //     ...Serializer.objectify(deltaRow[1])
-                    // };
-                    //
-                    // if (this.allowedContracts.has(decodedDeltaRow.code)) {
-                    //     const abi = this.allowedContracts.get(decodedDeltaRow.code);
-                    //     if (abi) {
-                    //         try {
-                    //             // deserialize data
-                    //             const type = abi.tables.find(value => value.name === decodedDeltaRow.table).type;
-                    //             decodedDeltaRow.value = Serializer.decode({
-                    //                 data: deltaRow[1].value.array, type, abi
-                    //             });
-                    //             deltaRows.push(decodedDeltaRow);
-                    //         } catch (e) {
-                    //             console.log(e.message, decodedDeltaRow);
-                    //         }
-                    //     }
-                    // }
-
-                });
-
-                // console.time('collectDeltas');
-                await this.collectDeltas(deltaRows, delta[1].rows.length);
-                // console.timeEnd('collectDeltas');
+                    promises.push(this.collectDeltas(deltaRows, delta[1].rows.length));
+                }
             }
+
+            // process traces
+            const actArray = [];
+            let expectedTraces = 0;
+            for (let trace of traces) {
+                let j = 0;
+                trace[1].action_traces.forEach((actionTrace: any, index: number) => {
+                    const act = Serializer.objectify(actionTrace[1].act);
+                    act.data = null;
+                    if (this.allowedContracts.has(act.account)) {
+                        expectedTraces++;
+                        this.dsPool[j].postMessage({
+                            event: 'action',
+                            data: {
+                                index,
+                                act,
+                                serializedData: actionTrace[1].act.data.array
+                            }
+                        });
+                        j++;
+                        if (j > this.dsPool.length - 1) {
+                            j = 0;
+                        }
+                    }
+                })
+            }
+
+            promises.push(this.collectTraces(actArray, expectedTraces));
+
+            await Promise.all(promises);
+
+            this.events.emit('block', {
+                ...blockInfo,
+                ...blockHeader,
+                acts: actArray,
+                contractRows: deltaRows
+            });
+
+            /*
+            console.log('--------------');
+            const decodeTime = process.hrtime.bigint() - tRef;
+            console.log('Total Processing Time:', Number(decodeTime) / 1000000, 'ms')
+            console.log(`Block ${blockInfo.head.block_num} | TRX: ${transactions.length} | Action Traces: ${actArray.length} | Deltas: ${deltaRows.length}`);
+            const relativeTimePerBlockData = (Number(decodeTime / BigInt(1000)) / (transactions.length + actArray.length + deltaRows.length)).toFixed(2);
+            console.log('Relative Processing Speed:', relativeTimePerBlockData, 'us/object');
+             */
+
         }
-
-        this.events.emit('block', {
-            ...blockInfo,
-            ...blockHeader,
-            acts: actArray,
-            contractRows: deltaRows
-        });
-
-        /*
-        console.log('--------------');
-        const decodeTime = process.hrtime.bigint() - tRef;
-        console.log('Total Processing Time:', Number(decodeTime) / 1000000, 'ms')
-        console.log(`Block ${blockInfo.head.block_num} | TRX: ${transactions.length} | Action Traces: ${actArray.length} | Deltas: ${deltaRows.length}`);
-        const relativeTimePerBlockData = (Number(decodeTime / BigInt(1000)) / (transactions.length + actArray.length + deltaRows.length)).toFixed(2);
-        console.log('Relative Processing Speed:', relativeTimePerBlockData, 'us/object');
-         */
-
     }
 
     private async collectTraces(actArray: any[], expectedLength: number) {
@@ -319,8 +322,12 @@ export class HyperionSequentialReader {
         this.dsPool.forEach(value => {
             value.postMessage({
                 event: 'set_abi',
-                data: {account, abi}
+                data: {account, abi: Serializer.objectify(abi)}
             });
         });
+    }
+
+    ack() {
+        this.ackBlockRange(1);
     }
 }

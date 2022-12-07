@@ -8,7 +8,7 @@ parentPort.on("message", value => {
     const data = value.data;
     switch (value.event) {
         case 'set_abi': {
-            contracts.set(value.data.account, value.data.abi);
+            contracts.set(value.data.account, ABI.from(value.data.abi));
             break;
         }
         case 'set_ship_abi': {
@@ -26,20 +26,20 @@ parentPort.on("message", value => {
                 present: data.present,
                 ...Serializer.objectify(deltaRow[1])
             };
-             if (contracts.has(decodedDeltaRow.code)) {
-                 const abi = contracts.get(decodedDeltaRow.code);
-                 if (abi) {
+            if (contracts.has(decodedDeltaRow.code)) {
+                const abi = contracts.get(decodedDeltaRow.code);
+                if (abi) {
                     try {
-                         // deserialize data
-                         const type = abi.tables.find(value => value.name === decodedDeltaRow.table).type;
-                         decodedDeltaRow.value = Serializer.decode({
-                             data: deltaRow[1].value.array, type, abi
-                         });
-                     } catch (e) {
-                         console.log(e.message, decodedDeltaRow);
-                     }
-                 }
-             }
+                        // deserialize data
+                        const type = abi.tables.find(value => value.name === decodedDeltaRow.table).type;
+                        decodedDeltaRow.value = Serializer.decode({
+                            data: deltaRow[1].value.array, type, abi
+                        });
+                    } catch (e) {
+                        console.log(e.message, decodedDeltaRow.code, decodedDeltaRow.table);
+                    }
+                }
+            }
             parentPort.postMessage({
                 event: 'decoded_delta',
                 wIndex: workerData.wIndex,
@@ -51,25 +51,29 @@ parentPort.on("message", value => {
             const act = data.act;
             const serializedData = data.serializedData;
             const abi = contracts.get(act.account);
-            if (abi) {
+            if (abi && act.serializedData) {
                 try {
-                    act.data = Serializer.decode({
+                    const decodedActData = Serializer.decode({
                         data: serializedData,
                         type: act.name,
                         abi
                     });
-                    parentPort.postMessage({
-                        event: 'decoded_action',
-                        wIndex: workerData.wIndex,
-                        decodedAct: {
-                            index: data.index,
-                            ...act
-                        }
-                    });
+                    if (decodedActData) {
+                        act.data = decodedActData;
+                    }
                 } catch (e) {
+                    act.data = serializedData;
                     console.log(e.message, act);
                 }
             }
+            parentPort.postMessage({
+                event: 'decoded_action',
+                wIndex: workerData.wIndex,
+                decodedAct: {
+                    index: data.index,
+                    ...act
+                }
+            });
             break;
         }
     }
