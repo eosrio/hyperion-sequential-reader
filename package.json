@@ -1,0 +1,27 @@
+{
+  "name": "hyperion-sequential-reader",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "nodemon dist/main.js",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@greymass/eosio": "^0.6.4",
+    "enf-eosjs": "^23.0.0-rc4",
+    "amqplib": "^0.10.3",
+    "ws": "^8.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.11.11",
+    "@types/ws": "^8.5.3",
+    "typescript": "^4.9.3",
+    "tsx": "^3.12.1",
+    "nodemon": "^2.0.20"
+  }
+}
