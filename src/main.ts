@@ -3,7 +3,7 @@ import {ABI} from "@greymass/eosio";
 import {readFileSync} from "fs";
 
 const reader = new HyperionSequentialReader('ws://127.0.0.1:8080', {
-    poolSize: 1
+    poolSize: 4
 });
 
 const abi = ABI.from(JSON.parse(readFileSync('./eosio.abi').toString()));
