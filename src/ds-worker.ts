@@ -51,7 +51,7 @@ parentPort.on("message", value => {
             const act = data.act;
             const serializedData = data.serializedData;
             const abi = contracts.get(act.account);
-            if (abi && act.serializedData) {
+            if (abi && serializedData) {
                 try {
                     const decodedActData = Serializer.decode({
                         data: serializedData,
