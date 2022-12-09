@@ -264,6 +264,10 @@ export class HyperionSequentialReader {
     private async collectTraces(actArray: any[], expectedLength: number) {
         //console.log(`Waiting for ${expectedLength} traces to be collected...`);
         await new Promise<void>((resolve) => {
+            if (expectedLength === 0) {
+                resolve();
+                return;
+            }
             this.traceCollector = (value) => {
                 actArray.push(value.decodedAct);
                 if (actArray.length === expectedLength) {
@@ -277,6 +281,10 @@ export class HyperionSequentialReader {
 
     private async collectDeltas(deltaRows: any[], expectedLength: number) {
         await new Promise<void>((resolve) => {
+            if (expectedLength === 0) {
+                resolve();
+                return;
+            }
             this.deltaCollector = (value) => {
                 deltaRows.push(value.decodedDeltaRow);
                 if (deltaRows.length === expectedLength) {
