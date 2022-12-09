@@ -1,3 +1,1 @@
-import {HyperionSequentialReader} from "./reader";
-
-export default HyperionSequentialReader;
+export * from "./reader.js";

@@ -1,0 +1,12 @@
+src
+packages
+scripts
+lib/**/*.ts
+lib/**/*.map
+!lib/**/*.d.ts
+.idea
+*.tgz
+tsconfig.*
+yarn.lock
+*.abi
+.gitattributes

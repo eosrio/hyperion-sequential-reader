@@ -3,6 +3,7 @@ import {ABI, ABIDecoder, Serializer} from "@greymass/eosio";
 import {EventEmitter} from "events";
 import {Worker} from "worker_threads";
 import * as path from "path";
+import { fileURLToPath } from "node:url";
 
 export class HyperionSequentialReader {
     ws: WebSocket
@@ -297,7 +298,8 @@ export class HyperionSequentialReader {
 
     createWorkers(param: { poolSize: number }) {
         for (let i = 0; i < param.poolSize; i++) {
-            const w = new Worker(path.resolve('dist/ds-worker.js'), {
+            const __dirname = fileURLToPath(new URL('.', import.meta.url));
+            const w = new Worker(path.join(__dirname, 'ds-worker.js'), {
                 workerData: {
                     wIndex: i
                 }
