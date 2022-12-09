@@ -2,7 +2,16 @@
   "name": "hyperion-sequential-reader",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "./lib/esm/index.js",
+  "exports": {
+    ".": {
+      "import": "./lib/esm/index.js"
+    },
+    "./esm": {
+      "import": "./lib/esm/index.js"
+    }
+  },
+  "type": "module",
   "scripts": {
     "start": "nodemon dist/main.js",
     "build": "tsc",
@@ -13,15 +22,15 @@
   "license": "ISC",
   "dependencies": {
     "@greymass/eosio": "^0.6.4",
-    "enf-eosjs": "^23.0.0-rc4",
     "amqplib": "^0.10.3",
+    "enf-eosjs": "^23.0.0-rc4",
     "ws": "^8.11.0"
   },
   "devDependencies": {
     "@types/node": "^18.11.11",
     "@types/ws": "^8.5.3",
-    "typescript": "^4.9.3",
+    "nodemon": "^2.0.20",
     "tsx": "^3.12.1",
-    "nodemon": "^2.0.20"
+    "typescript": "^4.9.3"
   }
 }

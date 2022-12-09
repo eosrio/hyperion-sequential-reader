@@ -1,4 +1,4 @@
-import WebSocket, {RawData} from "ws";
+import WebSocket, {ErrorEvent, RawData} from "ws";
 import {ABI, ABIDecoder, Serializer} from "@greymass/eosio";
 import {EventEmitter} from "events";
 import {Worker} from "worker_threads";
