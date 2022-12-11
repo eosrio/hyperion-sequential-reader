@@ -1,10 +1,14 @@
 import {HyperionSequentialReader} from "./reader.js";
 import {ABI} from "@greymass/eosio";
-import {readFileSync} from "fs";
+import {readFileSync} from "node:fs";
 
-const reader = new HyperionSequentialReader('ws://23.19.195.55:28999', {
+const reader = new HyperionSequentialReader({
+    shipApi: 'ws://127.0.0.1:48081',
+    chainApi: 'http://127.0.0.1:48888',
     poolSize: 4,
-    startBlock: 136393814
+    blockConcurrency: 2,
+    outputQueueLimit: 1000,
+    startBlock: -15000
 });
 
 ['eosio', 'eosio.evm', 'eosio.token'].forEach(c => {
@@ -14,24 +18,49 @@ const reader = new HyperionSequentialReader('ws://23.19.195.55:28999', {
 
 let lastBlockLogged = 0;
 let lastLogTime = Date.now();
-reader.events.on('block', (block) => {
-    let now = Date.now()
-    const thisBlock = block.this_block.block_num;
+reader.events.on('block', async (block) => {
+    // const now = Date.now();
+    const thisBlock = block.blockInfo.this_block.block_num;
+    // console.log(thisBlock);
     if (lastBlockLogged === 0) {
         lastBlockLogged = thisBlock;
+    } else {
+        if (thisBlock !== lastBlockLogged + 1) {
+            console.log('Block out of order!');
+        } else {
+            lastBlockLogged = thisBlock;
+        }
     }
 
-    if ((now - lastLogTime) > 5000) {
-        const blocksSeen = thisBlock - lastBlockLogged;
-        const elapsedSeconds = (now - lastLogTime) / 1000;
-        const blocksPerSecond = blocksSeen / elapsedSeconds;
-        console.log(`Processing speed: ${blocksPerSecond} blocks/sec`)
-        lastBlockLogged = thisBlock;
-        lastLogTime = now;
-    }
+    // await new Promise<void>(resolve => {
+    //     setTimeout(() => {
+    //         resolve();
+    //     }, 150);
+    // });
+
+    // if ((now - lastLogTime) > 5000) {
+    //     const blocksSeen = thisBlock - lastBlockLogged;
+    //     const elapsedSeconds = (now - lastLogTime) / 1000;
+    //     const blocksPerSecond = blocksSeen / elapsedSeconds;
+    //     console.log(`Processing speed: ${blocksPerSecond} blocks/sec`)
+    //     lastBlockLogged = thisBlock;
+    //     lastLogTime = now;
+    // }
+    // console.log(block);
+    // if (block.transactions && block.transactions.length > 0) {
+    //     console.log(block.transactions);
+    // }
+    // for (let action of block.actions) {
+    //     console.log(action);
+    // }
+    // for (let delta of block.deltas) {
+    //     console.log(delta);
+    // }
+    // console.log(`Block: ${thisBlock}`);
     reader.ack();
-     //console.log(block.acts);
-     //console.log(block.contractRows);
+    // console.log(Object.keys(block));
+    //console.log(block.acts);
+    //console.log(block.contractRows);
 });
 
 reader.start();
