@@ -371,6 +371,9 @@ export class HyperionSequentialReader {
             for (let trace of traces) {
                 let j = 0;
                 const rt = Serializer.objectify(trace[1]);
+                if (!rt.partial || rt.partial.length < 2)
+                    continue;
+
                 const partialTransaction = rt.partial[1];
 
                 for (const at of rt.action_traces) {
