@@ -24,7 +24,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@greymass/eosio": "0.6.5",
+    "@greymass/eosio": "0.6.6",
     "async": "^3.2.4",
     "node-fetch": "^3.3.0",
     "ws": "^8.11.0"

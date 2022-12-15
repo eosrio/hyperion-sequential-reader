@@ -53,7 +53,7 @@ function processDelta(message: any) {
                         data: {
                             index: message.content.index,
                             blockNum: message.content.blockNum,
-                            value: dsValue
+                            value: Serializer.objectify(dsValue)
                         }
                     });
                     return;
@@ -79,7 +79,7 @@ function processAction(message: any) {
                 parentPort.postMessage({
                     event: 'decoded_action',
                     wIndex: workerData.wIndex,
-                    data: message.data
+                    data: Serializer.objectify(message.data)
                 });
                 return;
             }
