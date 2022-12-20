@@ -2,13 +2,27 @@ import {HyperionSequentialReader} from "./reader.js";
 import {ABI} from "@greymass/eosio";
 import {readFileSync} from "node:fs";
 
+/*
 const reader = new HyperionSequentialReader({
-    shipApi: 'ws://127.0.0.1:48081',
-    chainApi: 'http://127.0.0.1:48888',
+    shipApi: 'ws://23.19.195.55:28999',
+    chainApi: 'https://testnet.telos.net',
     poolSize: 4,
     blockConcurrency: 2,
     outputQueueLimit: 1000,
-    startBlock: -15000
+    //startBlock: 136393814
+    startBlock: 181319055
+});
+ */
+
+const reader = new HyperionSequentialReader({
+    shipApi: 'ws://23.19.195.55:18999',
+    chainApi: 'https://mainnet.telos.net',
+    poolSize: 4,
+    blockConcurrency: 2,
+    outputQueueLimit: 1000,
+    irreversibleOnly: true,
+    //startBlock: 136393814
+    //startBlock: 181847691
 });
 
 ['eosio', 'eosio.evm', 'eosio.token'].forEach(c => {
@@ -21,6 +35,7 @@ let lastLogTime = Date.now();
 reader.events.on('block', async (block) => {
     // const now = Date.now();
     const thisBlock = block.blockInfo.this_block.block_num;
+    console.log(thisBlock);
     // console.log(thisBlock);
     if (lastBlockLogged === 0) {
         lastBlockLogged = thisBlock;
