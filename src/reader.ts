@@ -16,6 +16,7 @@ export interface HyperionSequentialReaderOptions {
     shipApi: string;
     chainApi: string;
     poolSize: number;
+    irreversibleOnly?: boolean;
     blockConcurrency?: number;
     startBlock?: number;
     endBlock?: number;
@@ -73,6 +74,7 @@ export class HyperionSequentialReader {
     private deltaRefMap: Map<string, any> = new Map();
     private lastEmittedBlock = 0;
     private nextBlockRequested = 0;
+    private irreversibleOnly;
 
     constructor(private options: HyperionSequentialReaderOptions) {
 
@@ -87,6 +89,7 @@ export class HyperionSequentialReader {
             poolSize: options.poolSize || 1
         });
 
+        this.irreversibleOnly = options.irreversibleOnly || false
 
         this.startBlock = options.startBlock || -1;
         this.endBlock = options.endBlock || 0xffffffff;
@@ -215,7 +218,9 @@ export class HyperionSequentialReader {
                 const data = Serializer.objectify(result[1]) as any;
                 readerLog(`Head block: ${data.head.block_num}`);
                 if (this.startBlock < 0) {
-                    this.startBlock = data.head.block_num + this.startBlock;
+                    this.startBlock = (this.irreversibleOnly ? data.last_irreversible.block_num : data.head.block_num) + this.startBlock;
+                } else {
+                    // TODO: should we error here if the requested start block is after LIB?
                 }
                 this.requestBlocks({
                     from: this.startBlock,
@@ -248,7 +253,7 @@ export class HyperionSequentialReader {
             end_block_num: param.to,
             max_messages_in_flight: this.maxMessagesInFlight,
             have_positions: [],
-            irreversible_only: false,
+            irreversible_only: this.irreversibleOnly,
             fetch_block: true,
             fetch_traces: true,
             fetch_deltas: true,
