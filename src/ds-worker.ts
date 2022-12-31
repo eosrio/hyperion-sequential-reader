@@ -53,6 +53,7 @@ function processDelta(message: any) {
                         data: {
                             index: message.content.index,
                             blockNum: message.content.blockNum,
+                            blockId: message.content.blockId,
                             value: Serializer.objectify(dsValue)
                         }
                     });
@@ -70,6 +71,7 @@ function processDelta(message: any) {
 
 function processAction(message: any) {
     const act = message.data.act;
+    const blockId = message.data.blockId;
     const abi = contracts.get(act.account);
     if (abi) {
         try {
@@ -79,7 +81,10 @@ function processAction(message: any) {
                 parentPort.postMessage({
                     event: 'decoded_action',
                     wIndex: workerData.wIndex,
-                    data: Serializer.objectify(message.data)
+                    data: {
+                        blockId,
+                        ...Serializer.objectify(message.data)
+                    }
                 });
                 return;
             }

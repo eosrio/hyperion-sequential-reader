@@ -73,6 +73,7 @@ export class HyperionSequentialReader {
     private actionRefMap: Map<number, any> = new Map();
     private deltaRefMap: Map<string, any> = new Map();
     private lastEmittedBlock = 0;
+    private lastReceivedBlock = 0;  // fork detection
     private nextBlockRequested = 0;
     private irreversibleOnly;
 
@@ -269,7 +270,19 @@ export class HyperionSequentialReader {
         });
 
         const blockNum = blockInfo.this_block.block_num;
-        // console.log('Decoding block:', blockNum);
+        const blockId = blockInfo.this_block.block_id;
+        // console.log('Decoding block:', blockNum, ' id: ', blockId);
+
+        // fork handling
+        if (this.lastReceivedBlock != 0 && blockNum <= this.lastReceivedBlock) {
+            let i = blockNum;
+            console.log(`FORK! purging block collector from ${i}`)
+            while(this.blockCollector.delete(i))
+                i++;
+            console.log(`done, purged up to ${i}`)
+        }
+
+        this.lastReceivedBlock = blockNum;
 
         if (resultElement.block && resultElement.traces && resultElement.deltas && blockNum) {
 
@@ -359,7 +372,12 @@ export class HyperionSequentialReader {
                             extendedDeltas.push(this.deltaRefMap.get(key));
                             this.dsPool[j].postMessage({
                                 event: 'delta',
-                                content: {index, blockNum, extDelta}
+                                content: {
+                                    index,
+                                    blockNum,
+                                    blockId,
+                                    extDelta
+                                }
                             });
                             // round-robin to pools
                             j++;
@@ -405,6 +423,7 @@ export class HyperionSequentialReader {
                             data: {
                                 gs,
                                 blockNum,
+                                blockId,
                                 act: actionTrace.act
                             }
                         });
@@ -417,7 +436,7 @@ export class HyperionSequentialReader {
                 }
             }
 
-            this.blockCollector.set(blockInfo.this_block.block_num, {
+            this.blockCollector.set(blockNum, {
                 ready: false,
                 blockInfo,
                 blockHeader,
@@ -509,6 +528,13 @@ export class HyperionSequentialReader {
         const refAction = this.actionRefMap.get(data.gs);
         refAction.act.data = data.act.data;
         const block = this.blockCollector.get(data.blockNum);
+        const blockId = block.blockInfo.this_block.block_id;
+        if (blockId != data.blockId) {
+            console.log(
+                `discarding data due to fork on block #${data.blockNum}, data id: ${data.blockId}, collector id: ${blockId}`);
+            return
+        }
+
         block.counters.actions++;
         this.actionRefMap.delete(data.gs);
         this.checkBlock(block);
@@ -519,6 +545,12 @@ export class HyperionSequentialReader {
         const refDelta = this.deltaRefMap.get(key);
         refDelta.value = data.value;
         const block = this.blockCollector.get(data.blockNum);
+        const blockId = block.blockInfo.this_block.block_id;
+        if (blockId != data.blockId) {
+            console.log(
+                `discarding data due to fork on block #${data.blockNum}, data id: ${data.blockId}, collector id: ${blockId}`);
+            return
+        }
         block.counters.deltas++;
         this.deltaRefMap.delete(key);
         this.checkBlock(block);
