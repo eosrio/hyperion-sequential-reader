@@ -73,7 +73,6 @@ export class HyperionSequentialReader {
     private actionRefMap: Map<number, any> = new Map();
     private deltaRefMap: Map<string, any> = new Map();
     private lastEmittedBlock = 0;
-    private lastReceivedBlock = 0;  // fork detection
     private nextBlockRequested = 0;
     private irreversibleOnly;
 
@@ -271,20 +270,18 @@ export class HyperionSequentialReader {
 
         const blockNum = blockInfo.this_block.block_num;
         const blockId = blockInfo.this_block.block_id;
-        // console.log('Decoding block:', blockNum, ' id: ', blockId);
+        console.log('Decoding block:', blockNum, ' id: ', blockId);
 
         // fork handling
-        if (this.lastReceivedBlock != 0 && blockNum <= this.lastReceivedBlock) {
+        if (this.blockCollector.has(blockNum)) {
             let i = blockNum;
             console.log(`FORK! purging block collector from ${i}`)
             while(this.blockCollector.delete(i))
                 i++;
             console.log(`done, purged up to ${i}`)
-            this.lastEmittedBlock = blockNum - 1;
-            this.nextBlockRequested = blockNum - 1;
+            this.lastEmittedBlock = 0;
+            this.nextBlockRequested = 0;
         }
-
-        this.lastReceivedBlock = blockNum;
 
         if (resultElement.block && resultElement.traces && resultElement.deltas && blockNum) {
 
@@ -567,6 +564,7 @@ export class HyperionSequentialReader {
             delete block.targets;
             block.ready = true;
             // check if this block can be emitted directly
+            console.log(`nextBlock: ${this.nextBlockRequested}`);
             if (this.lastEmittedBlock === 0 || this.nextBlockRequested === block.blockInfo.this_block.block_num) {
                 if (this.nextBlockRequested === block.blockInfo.this_block.block_num) {
                     this.nextBlockRequested = 0;

@@ -3,12 +3,12 @@ import {ABI} from "@greymass/eosio";
 import {readFileSync} from "node:fs";
 
 const reader = new HyperionSequentialReader({
-    shipApi: 'ws://127.0.0.1:48081',
-    chainApi: 'http://127.0.0.1:48888',
+    shipApi: 'ws://test1.us.telos.net:28999',
+    chainApi: 'http://testnet.telos.net',
     poolSize: 4,
     blockConcurrency: 2,
     outputQueueLimit: 1000,
-    startBlock: -15000
+    startBlock: 174582074
 });
 
 ['eosio', 'eosio.evm', 'eosio.token'].forEach(c => {
