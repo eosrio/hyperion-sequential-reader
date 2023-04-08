@@ -270,7 +270,6 @@ export class HyperionSequentialReader {
 
         const blockNum = blockInfo.this_block.block_num;
         const blockId = blockInfo.this_block.block_id;
-        console.log('Decoding block:', blockNum, ' id: ', blockId);
 
         // fork handling
         if (this.blockCollector.has(blockNum)) {
@@ -308,7 +307,8 @@ export class HyperionSequentialReader {
             const traces = Serializer.decode({
                 type: 'transaction_trace[]',
                 data: resultElement.traces.array as Uint8Array,
-                abi: this.shipAbi
+                abi: this.shipAbi,
+                ignoreInvalidUTF8: true
             }) as any[];
 
             const deltaArrays = Serializer.decode({
@@ -564,7 +564,6 @@ export class HyperionSequentialReader {
             delete block.targets;
             block.ready = true;
             // check if this block can be emitted directly
-            console.log(`nextBlock: ${this.nextBlockRequested}`);
             if (this.lastEmittedBlock === 0 || this.nextBlockRequested === block.blockInfo.this_block.block_num) {
                 if (this.nextBlockRequested === block.blockInfo.this_block.block_num) {
                     this.nextBlockRequested = 0;
