@@ -1,4 +1,5 @@
-import WebSocket, {ErrorEvent, RawData} from "ws";
+import {RawData} from "ws";
+import { StateHistorySocket } from "./state-history.js";
 import {ABI, ABIDecoder, APIClient, Serializer} from "@greymass/eosio";
 import {EventEmitter} from "events";
 import {Worker} from "worker_threads";
@@ -24,8 +25,9 @@ export interface HyperionSequentialReaderOptions {
 }
 
 export class HyperionSequentialReader {
-    ws: WebSocket
+    ship: StateHistorySocket;
     max_payload_mb = 256;
+    reconnectCount = 0;
     private shipAbi?: ABI;
     private shipAbiReady = false;
     private shipInitStatus?: any;
@@ -167,27 +169,32 @@ export class HyperionSequentialReader {
 
     start() {
         readerLog(`Connecting to ${this.shipApi}...`);
-        this.ws = new WebSocket(this.shipApi, {
-            perMessageDeflate: false,
-            maxPayload: this.max_payload_mb * 1024 * 1024,
-            handshakeTimeout: 5000,
-        });
-        this.ws.on('open', () => {
-            readerLog('Websocket connected!');
-        });
-        this.ws.on('message', (data: RawData) => {
-            this.handleShipMessage(data as Buffer).catch(console.log);
-        });
-        this.ws.on('close', () => {
-            readerLog('Websocket disconnected!');
-        });
-        this.ws.on('error', (err: ErrorEvent) => {
-            readerLog(`${this.shipApi} :: ${err.message}`);
-        });
+        this.ship = new StateHistorySocket(this.shipApi, this.max_payload_mb);
+
+        this.ship.connect(
+            (data: RawData) => {
+                this.handleShipMessage(data as Buffer).catch(console.log);
+            },
+            this.handleLostConnection.bind(this),
+            () => {
+                readerLog('connection failed');
+            }, () => {
+                this.reconnectCount = 0;
+            }
+        );
+    }
+
+    private handleLostConnection() {
+        this.ship.close(false);
+        readerLog(`Retrying connection in 5 seconds... [attempt: ${this.reconnectCount + 1}]`);
+        setTimeout(() => {
+            this.reconnectCount++;
+            this.start();
+        }, 5000);
     }
 
     private send(param: (string | any)[]) {
-        this.ws.send(Serializer.encode({
+        this.ship.send(Serializer.encode({
             type: 'request',
             object: param,
             abi: this.shipAbi
