@@ -4,7 +4,6 @@ export class StateHistorySocket {
 	private ws;
 	private readonly shipUrl;
 	private readonly max_payload_mb;
-	retryOnDisconnect = true;
 	connected = false;
 
 	constructor(ship_url, max_payload_mb) {
@@ -24,28 +23,22 @@ export class StateHistorySocket {
 		});
 		this.ws.on('open', () => {
 			this.connected = true;
-			console.log('Websocket connected!');
-			if (onConnected) {
+			if (onConnected)
 				onConnected();
-			}
 		});
 		this.ws.on('message', (data) => onMessage(data));
 		this.ws.on('close', () => {
 			this.connected = false;
-			console.log('Websocket disconnected!');
-			if(this.retryOnDisconnect) {
-				onDisconnect();
-			}
+            if (onDisconnect)
+    			onDisconnect();
 		});
 		this.ws.on('error', (err) => {
-			console.log(`${this.shipUrl} :: ${err.message}`);
+            if (onError)
+                onError(err);
 		});
 	}
 
-	close(graceful: boolean) {
-		if(graceful) {
-			this.retryOnDisconnect = false;
-		}
+	close() {
 		this.ws.close();
 	}
 

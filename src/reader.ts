@@ -78,9 +78,14 @@ export class HyperionSequentialReader {
     private nextBlockRequested = 0;
     private irreversibleOnly;
 
+    onConnected: () => void = null;
+    onDisconnect: () => void = null;
+    onError: (err) => void = null;
+
     constructor(private options: HyperionSequentialReaderOptions) {
 
         this.shipApi = options.shipApi;
+        this.ship = new StateHistorySocket(this.shipApi, this.max_payload_mb);
 
         this.api = new APIClient({
             url: options.chainApi,
@@ -169,28 +174,30 @@ export class HyperionSequentialReader {
 
     start() {
         readerLog(`Connecting to ${this.shipApi}...`);
-        this.ship = new StateHistorySocket(this.shipApi, this.max_payload_mb);
 
         this.ship.connect(
             (data: RawData) => {
                 this.handleShipMessage(data as Buffer).catch(console.log);
             },
-            this.handleLostConnection.bind(this),
             () => {
-                readerLog('connection failed');
-            }, () => {
+                this.ship.close();
+                setTimeout(() => {
+                    this.reconnectCount++;
+                    this.start();
+                }, 5000);
+                if (this.onDisconnect)
+                    this.onDisconnect();
+            },
+            (err) => {
+                if (this.onError)
+                    this.onError(err);
+            },
+            () => {
                 this.reconnectCount = 0;
+                if (this.onConnected)
+                    this.onConnected();
             }
         );
-    }
-
-    private handleLostConnection() {
-        this.ship.close(false);
-        readerLog(`Retrying connection in 5 seconds... [attempt: ${this.reconnectCount + 1}]`);
-        setTimeout(() => {
-            this.reconnectCount++;
-            this.start();
-        }, 5000);
     }
 
     private send(param: (string | any)[]) {
