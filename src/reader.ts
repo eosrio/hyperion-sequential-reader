@@ -181,6 +181,7 @@ export class HyperionSequentialReader {
             },
             () => {
                 this.ship.close();
+                this.shipAbiReady = false;
                 setTimeout(() => {
                     this.reconnectCount++;
                     this.start();
