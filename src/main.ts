@@ -3,12 +3,12 @@ import {ABI} from "@greymass/eosio";
 import {readFileSync} from "node:fs";
 
 const reader = new HyperionSequentialReader({
-    shipApi: 'ws://test1.us.telos.net:28999',
-    chainApi: 'http://testnet.telos.net',
+    shipApi: 'ws://127.0.0.1:8080',
+    chainApi: 'http://127.0.0.1:8888',
     poolSize: 4,
     blockConcurrency: 2,
     outputQueueLimit: 1000,
-    startBlock: 174582074
+    startBlock: 1
 });
 
 ['eosio', 'eosio.evm', 'eosio.token'].forEach(c => {
@@ -21,7 +21,7 @@ let lastLogTime = Date.now();
 reader.events.on('block', async (block) => {
     // const now = Date.now();
     const thisBlock = block.blockInfo.this_block.block_num;
-    // console.log(thisBlock);
+    console.log(`event catched: ${thisBlock}`);
     if (lastBlockLogged === 0) {
         lastBlockLogged = thisBlock;
     } else {

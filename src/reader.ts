@@ -13,6 +13,8 @@ function readerLog(message?: any, ...optionalParams: any[]): void {
     console.log(`[READER]`, message, ...optionalParams);
 }
 
+const HIST_TIME = 60 * 60;  // 60 minutes
+
 export interface HyperionSequentialReaderOptions {
     shipApi: string;
     chainApi: string;
@@ -68,6 +70,8 @@ export class HyperionSequentialReader {
         actions: any[],
         deltas: any[]
     }> = new Map();
+
+    blockHistory: Map<number, number> = new Map();
 
     api: APIClient;
     shipApi: string;
@@ -286,15 +290,34 @@ export class HyperionSequentialReader {
         const blockNum = blockInfo.this_block.block_num;
         const blockId = blockInfo.this_block.block_id;
 
-        // fork handling
-        if (this.blockCollector.has(blockNum)) {
+        // fork handling;
+        if (this.blockHistory.has(blockNum)) {
             let i = blockNum;
-            console.log(`FORK! purging block collector from ${i}`)
+            console.log('FORK detected!');
+            console.log(`purging block collector from ${i}`);
             while(this.blockCollector.delete(i))
+                i++;
+            console.log(`done, purged up to ${i}`);
+            i = blockNum;
+            console.log(`purging block history from ${i}`);
+            while(this.blockHistory.delete(i))
                 i++;
             console.log(`done, purged up to ${i}`)
             this.lastEmittedBlock = 0;
             this.nextBlockRequested = 0;
+        }
+
+        const now = Date.now() / 1000
+        this.blockHistory.set(blockNum, now);
+
+        // trim older than HIST_TIME
+        let i = blockNum;
+        while(this.blockHistory.get(i)) {
+            const entryTimestamp = this.blockHistory.get(i)
+            if (now - entryTimestamp > HIST_TIME)
+                this.blockHistory.delete(i);
+
+            i--;
         }
 
         if (resultElement.block && resultElement.traces && resultElement.deltas && blockNum) {
@@ -450,7 +473,7 @@ export class HyperionSequentialReader {
                 }
             }
 
-            this.blockCollector.set(blockNum, {
+            const nBlock = {
                 ready: false,
                 blockInfo,
                 blockHeader,
@@ -465,7 +488,12 @@ export class HyperionSequentialReader {
                 deltas: extendedDeltas,
                 actions: extendedActions,
                 createdAt: process.hrtime.bigint()
-            });
+            };
+
+            this.blockCollector.set(blockNum, nBlock);
+
+            if (extendedDeltas.length == 0 && extendedActions.length == 0)
+                this.checkBlock(nBlock);
         }
     }
 
