@@ -300,7 +300,7 @@ export class HyperionSequentialReader {
             while(this.blockCollector.delete(i))
                 i++;
             console.log(`done, purged up to ${i}`);
-            console.log(`purging block history from ${i}`);
+            console.log(`purging block history from ${blockNum}`);
             this.blockHistory.deleteFrom(blockNum);
             console.log('done.')
             this.lastEmittedBlock = 0;

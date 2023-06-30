@@ -5,8 +5,8 @@ export interface TimedSetEntry {
 
 export class TimedSet<T> {
 
-    private dict: Map<T, TimedSetEntry> = new Map();
-    private queue: Array<T> = [];
+    dict: Map<T, TimedSetEntry> = new Map();
+    queue: Array<T> = [];
 
     maxTimeMS: number;
 
@@ -62,6 +62,6 @@ export class TimedSet<T> {
             i++;
             currentEntry = this.dict.get(this.queue[i]);
         }
-        this.queue.splice(0, i + 1);
+        this.queue.splice(0, i);
     }
 };
