@@ -9,11 +9,13 @@ import {cargo, queue, QueueObject} from "async";
 import fetch from "node-fetch";
 import * as process from "process";
 
+import {TimedSet} from "./timedset.js";
+
 function readerLog(message?: any, ...optionalParams: any[]): void {
     console.log(`[READER]`, message, ...optionalParams);
 }
 
-const HIST_TIME = 60 * 60;  // 60 minutes
+const HIST_TIME = 15 * 60 * 1000;  // 15 minutes
 
 export interface HyperionSequentialReaderOptions {
     shipApi: string;
@@ -71,7 +73,7 @@ export class HyperionSequentialReader {
         deltas: any[]
     }> = new Map();
 
-    blockHistory: Map<number, number> = new Map();
+    blockHistory: TimedSet<number> = new TimedSet(HIST_TIME);
 
     api: APIClient;
     shipApi: string;
@@ -298,27 +300,15 @@ export class HyperionSequentialReader {
             while(this.blockCollector.delete(i))
                 i++;
             console.log(`done, purged up to ${i}`);
-            i = blockNum;
             console.log(`purging block history from ${i}`);
-            while(this.blockHistory.delete(i))
-                i++;
-            console.log(`done, purged up to ${i}`)
+            this.blockHistory.deleteFrom(blockNum);
+            console.log('done.')
             this.lastEmittedBlock = 0;
             this.nextBlockRequested = 0;
         }
 
-        const now = Date.now() / 1000
-        this.blockHistory.set(blockNum, now);
-
-        // trim older than HIST_TIME
-        let i = blockNum;
-        while(this.blockHistory.get(i)) {
-            const entryTimestamp = this.blockHistory.get(i)
-            if (now - entryTimestamp > HIST_TIME)
-                this.blockHistory.delete(i);
-
-            i--;
-        }
+        this.blockHistory.add(blockNum);
+        this.blockHistory.tick();
 
         if (resultElement.block && resultElement.traces && resultElement.deltas && blockNum) {
 
