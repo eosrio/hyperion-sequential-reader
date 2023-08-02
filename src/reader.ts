@@ -32,6 +32,7 @@ export class HyperionSequentialReader {
     ship: StateHistorySocket;
     max_payload_mb = 256;
     reconnectCount = 0;
+    private connecting = false;
     private shipAbi?: ABI;
     private shipAbiReady = false;
     private shipInitStatus?: any;
@@ -179,7 +180,11 @@ export class HyperionSequentialReader {
     }
 
     start() {
+        if (this.connecting)
+            return;
+
         readerLog(`Connecting to ${this.shipApi}...`);
+        this.connecting = true;
 
         this.ship.connect(
             (data: RawData) => {
@@ -200,11 +205,22 @@ export class HyperionSequentialReader {
                     this.onError(err);
             },
             () => {
-                this.reconnectCount = 0;
                 if (this.onConnected)
                     this.onConnected();
+                this.connecting = false;
             }
         );
+    }
+
+    restart() {
+        readerLog("Restarting...");
+        this.ship.close();
+        this.shipAbiReady = false;
+        setTimeout(() => {
+            this.reconnectCount++;
+            this.startBlock = this.lastEmittedBlock + 1;
+            this.start();
+        }, 5000);
     }
 
     private send(param: (string | any)[]) {
