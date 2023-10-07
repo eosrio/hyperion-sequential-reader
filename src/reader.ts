@@ -326,7 +326,7 @@ export class HyperionSequentialReader {
         this.blockHistory.add(blockNum);
         this.blockHistory.tick();
 
-        if (resultElement.block && resultElement.traces && resultElement.deltas && blockNum) {
+        if (resultElement.block && blockNum) {
 
             const block = Serializer.decode({
                 type: 'signed_block',
@@ -348,78 +348,127 @@ export class HyperionSequentialReader {
                 block_extensions: block.block_extensions,
             });
 
-            const traces = Serializer.decode({
-                type: 'transaction_trace[]',
-                data: resultElement.traces.array as Uint8Array,
-                abi: this.shipAbi,
-                ignoreInvalidUTF8: true
-            }) as any[];
-
-            const deltaArrays = Serializer.decode({
-                type: 'table_delta[]',
-                data: resultElement.deltas.array as Uint8Array,
-                abi: this.shipAbi
-            }) as any[];
-
-
-            // process deltas
-            let expectedDeltas = 0;
             const extendedDeltas = [];
-            for (let deltaArray of deltaArrays) {
+            if (resultElement.deltas) {
+                const deltaArrays = Serializer.decode({
+                    type: 'table_delta[]',
+                    data: resultElement.deltas.array as Uint8Array,
+                    abi: this.shipAbi
+                }) as any[];
 
-                // make sure the ABI for the watched contracts is updated before other processing is done
-                if (deltaArray[1].name === 'account') {
-                    const abiRows = deltaArray[1].rows.map(r => {
-                        if (r.present && r.data.array) {
-                            const decodedRow = Serializer.decode({
-                                type: 'account',
-                                data: r.data.array,
-                                abi: this.shipAbi
-                            });
-                            if (decodedRow[1].abi) {
-                                return Serializer.objectify(decodedRow[1]);
+
+                // process deltas
+                for (let deltaArray of deltaArrays) {
+
+                    // make sure the ABI for the watched contracts is updated before other processing is done
+                    if (deltaArray[1].name === 'account') {
+                        const abiRows = deltaArray[1].rows.map(r => {
+                            if (r.present && r.data.array) {
+                                const decodedRow = Serializer.decode({
+                                    type: 'account',
+                                    data: r.data.array,
+                                    abi: this.shipAbi
+                                });
+                                if (decodedRow[1].abi) {
+                                    return Serializer.objectify(decodedRow[1]);
+                                }
                             }
-                        }
-                        return null;
-                    }).filter(r => r !== null);
-                    abiRows.forEach((abiRow) => {
-                        if (this.allowedContracts.has(abiRow.name)) {
-                            console.time('abiDecoding');
-                            readerLog(abiRow.name, abiRow.creation_date);
-                            const abiBin = new Uint8Array(Buffer.from(abiRow.abi, 'hex'));
-                            const abi = ABI.fromABI(new ABIDecoder(abiBin));
-                            this.addContract(abiRow.name, abi);
-                            console.timeEnd('abiDecoding');
-                        }
-                    });
+                            return null;
+                        }).filter(r => r !== null);
+                        abiRows.forEach((abiRow) => {
+                            if (this.allowedContracts.has(abiRow.name)) {
+                                console.time('abiDecoding');
+                                readerLog(abiRow.name, abiRow.creation_date);
+                                const abiBin = new Uint8Array(Buffer.from(abiRow.abi, 'hex'));
+                                const abi = ABI.fromABI(new ABIDecoder(abiBin));
+                                this.addContract(abiRow.name, abi);
+                                console.timeEnd('abiDecoding');
+                            }
+                        });
+                    }
+
+
+                    if (deltaArray[1].name === 'contract_row') {
+                        let j = 0;
+                        deltaArray[1].rows.forEach((row: any, index: number) => {
+                            const deltaRow = Serializer.decode({
+                                data: row.data.array,
+                                type: 'contract_row',
+                                abi: this.shipAbi
+                            })[1];
+                            const deltaObj = Serializer.objectify(deltaRow);
+                            if (this.allowedContracts.has(deltaObj.code)) {
+                                const extDelta = {
+                                    present: row.present,
+                                    ...deltaObj
+                                };
+                                const key = `${blockNum}:${index}`;
+                                this.deltaRefMap.set(key, extDelta);
+                                extendedDeltas.push(this.deltaRefMap.get(key));
+                                this.dsPool[j].postMessage({
+                                    event: 'delta',
+                                    content: {
+                                        index,
+                                        blockNum,
+                                        blockId,
+                                        extDelta
+                                    }
+                                });
+                                // round-robin to pools
+                                j++;
+                                if (j > this.dsPool.length - 1) {
+                                    j = 0;
+                                }
+                            }
+                        });
+                    }
                 }
+            }
 
+            const extendedActions = [];
+            if (resultElement.traces) {
+                const traces = Serializer.decode({
+                    type: 'transaction_trace[]',
+                    data: resultElement.traces.array as Uint8Array,
+                    abi: this.shipAbi,
+                    ignoreInvalidUTF8: true
+                }) as any[];
 
-                if (deltaArray[1].name === 'contract_row') {
+                // process traces
+                for (let trace of traces) {
                     let j = 0;
-                    deltaArray[1].rows.forEach((row: any, index: number) => {
-                        const deltaRow = Serializer.decode({
-                            data: row.data.array,
-                            type: 'contract_row',
-                            abi: this.shipAbi
-                        })[1];
-                        const deltaObj = Serializer.objectify(deltaRow);
-                        if (this.allowedContracts.has(deltaObj.code)) {
-                            expectedDeltas++;
-                            const extDelta = {
-                                present: row.present,
-                                ...deltaObj
+                    const rt = Serializer.objectify(trace[1]);
+                    if (!rt.partial || rt.partial.length < 2)
+                        continue;
+
+                    const partialTransaction = rt.partial[1];
+
+                    for (const at of rt.action_traces) {
+                        const actionTrace = at[1];
+                        if (this.allowedContracts.has(actionTrace.act.account)) {
+                            const gs = actionTrace.receipt[1].global_sequence;
+                            const extAction = {
+                                actionOrdinal: actionTrace.action_ordinal,
+                                creatorActionOrdinal: actionTrace.creator_action_ordinal,
+                                trxId: rt.id,
+                                cpu: rt.cpu_usage_us,
+                                net: rt.net_usage_words,
+                                ram: actionTrace.account_ram_deltas,
+                                receipt: actionTrace.receipt[1],
+                                receiver: actionTrace.receiver,
+                                console: actionTrace.console,
+                                signatures: partialTransaction.signatures,
+                                act: actionTrace.act
                             };
-                            const key = `${blockNum}:${index}`;
-                            this.deltaRefMap.set(key, extDelta);
-                            extendedDeltas.push(this.deltaRefMap.get(key));
+                            this.actionRefMap.set(gs, extAction);
+                            extendedActions.push(this.actionRefMap.get(gs));
                             this.dsPool[j].postMessage({
-                                event: 'delta',
-                                content: {
-                                    index,
+                                event: 'action',
+                                data: {
+                                    gs,
                                     blockNum,
                                     blockId,
-                                    extDelta
+                                    act: actionTrace.act
                                 }
                             });
                             // round-robin to pools
@@ -427,53 +476,6 @@ export class HyperionSequentialReader {
                             if (j > this.dsPool.length - 1) {
                                 j = 0;
                             }
-                        }
-                    });
-                }
-            }
-
-            // process traces
-            const extendedActions = [];
-            for (let trace of traces) {
-                let j = 0;
-                const rt = Serializer.objectify(trace[1]);
-                if (!rt.partial || rt.partial.length < 2)
-                    continue;
-
-                const partialTransaction = rt.partial[1];
-
-                for (const at of rt.action_traces) {
-                    const actionTrace = at[1];
-                    if (this.allowedContracts.has(actionTrace.act.account)) {
-                        const gs = actionTrace.receipt[1].global_sequence;
-                        const extAction = {
-                            actionOrdinal: actionTrace.action_ordinal,
-                            creatorActionOrdinal: actionTrace.creator_action_ordinal,
-                            trxId: rt.id,
-                            cpu: rt.cpu_usage_us,
-                            net: rt.net_usage_words,
-                            ram: actionTrace.account_ram_deltas,
-                            receipt: actionTrace.receipt[1],
-                            receiver: actionTrace.receiver,
-                            console: actionTrace.console,
-                            signatures: partialTransaction.signatures,
-                            act: actionTrace.act
-                        };
-                        this.actionRefMap.set(gs, extAction);
-                        extendedActions.push(this.actionRefMap.get(gs));
-                        this.dsPool[j].postMessage({
-                            event: 'action',
-                            data: {
-                                gs,
-                                blockNum,
-                                blockId,
-                                act: actionTrace.act
-                            }
-                        });
-                        // round-robin to pools
-                        j++;
-                        if (j > this.dsPool.length - 1) {
-                            j = 0;
                         }
                     }
                 }
