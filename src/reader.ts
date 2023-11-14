@@ -193,10 +193,6 @@ export class HyperionSequentialReader {
             () => {
                 this.ship.close();
                 this.shipAbiReady = false;
-                setTimeout(() => {
-                    this.reconnectCount++;
-                    this.start();
-                }, 5000);
                 if (this.onDisconnect)
                     this.onDisconnect();
             },
@@ -216,6 +212,8 @@ export class HyperionSequentialReader {
         readerLog("Restarting...");
         this.ship.close();
         this.shipAbiReady = false;
+        this.blockHistory.clear()
+        this.blockCollector.clear()
         setTimeout(() => {
             this.reconnectCount++;
             this.startBlock = this.lastEmittedBlock + 1;
@@ -375,14 +373,14 @@ export class HyperionSequentialReader {
                             }
                             return null;
                         }).filter(r => r !== null);
-                        abiRows.forEach((abiRow) => {
+                        abiRows.forEach((abiRow, index) => {
                             if (this.allowedContracts.has(abiRow.name)) {
-                                console.time('abiDecoding');
+                                console.time(`abiDecoding-${abiRow.name}-${index}`);
                                 readerLog(abiRow.name, abiRow.creation_date);
                                 const abiBin = new Uint8Array(Buffer.from(abiRow.abi, 'hex'));
                                 const abi = ABI.fromABI(new ABIDecoder(abiBin));
                                 this.addContract(abiRow.name, abi);
-                                console.timeEnd('abiDecoding');
+                                console.timeEnd(`abiDecoding-${abiRow.name}-${index}`);
                             }
                         });
                     }

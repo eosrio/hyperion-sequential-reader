@@ -64,4 +64,9 @@ export class TimedSet<T> {
         }
         this.queue.splice(0, i);
     }
+
+    clear() {
+        this.queue = []
+        this.dict.clear()
+    }
 };
