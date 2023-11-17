@@ -445,6 +445,10 @@ export class HyperionSequentialReader {
 
                     for (const at of rt.action_traces) {
                         const actionTrace = at[1];
+                        if (actionTrace.receipt === null) {
+                            console.log(`[READER][WARN]: action trace with receipt null! maybe hard_fail'ed deferred tx? block: ${blockNum}`);
+                            continue;
+                        }
                         if (this.allowedContracts.has(actionTrace.act.account)) {
                             const gs = actionTrace.receipt[1].global_sequence;
                             const extAction = {
