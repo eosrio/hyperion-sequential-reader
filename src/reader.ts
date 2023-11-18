@@ -375,12 +375,14 @@ export class HyperionSequentialReader {
                         }).filter(r => r !== null);
                         abiRows.forEach((abiRow, index) => {
                             if (this.allowedContracts.has(abiRow.name)) {
-                                console.time(`abiDecoding-${abiRow.name}-${index}`);
-                                readerLog(abiRow.name, abiRow.creation_date);
+                                readerLog(abiRow.name, `block_num: ${blockNum}`, abiRow.creation_date, `abi hex len: ${abiRow.abi.length}`);
+                                if (abiRow.abi.length == 0)
+                                    return;
+                                console.time(`abiDecoding-${abiRow.name}-${blockNum}`);
                                 const abiBin = new Uint8Array(Buffer.from(abiRow.abi, 'hex'));
                                 const abi = ABI.fromABI(new ABIDecoder(abiBin));
                                 this.addContract(abiRow.name, abi);
-                                console.timeEnd(`abiDecoding-${abiRow.name}-${index}`);
+                                console.timeEnd(`abiDecoding-${abiRow.name}-${blockNum}`);
                             }
                         });
                     }
@@ -443,6 +445,10 @@ export class HyperionSequentialReader {
 
                     for (const at of rt.action_traces) {
                         const actionTrace = at[1];
+                        if (actionTrace.receipt === null) {
+                            console.log(`[READER][WARN]: action trace with receipt null! maybe hard_fail'ed deferred tx? block: ${blockNum}`);
+                            continue;
+                        }
                         if (this.allowedContracts.has(actionTrace.act.account)) {
                             const gs = actionTrace.receipt[1].global_sequence;
                             const extAction = {
