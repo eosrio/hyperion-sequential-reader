@@ -479,6 +479,16 @@ export class HyperionSequentialReader {
                             continue;
                         }
                         if (this.allowedContracts.has(actionTrace.act.account)) {
+                            const abiActionNames = [];
+                            this.allowedContracts.get(actionTrace.act.account).actions.forEach((obj) => {
+                                abiActionNames.push(obj.name);
+                            });
+                            if (!abiActionNames.includes(actionTrace.act.name)) {
+                                this.log(
+                                    'warning',
+                                    `action ${actionTrace.act.name} not found in ${actionTrace.act.account}'s abi, ignoring tx ${rt.id}...`);
+                                continue;
+                            }
                             const gs = actionTrace.receipt[1].global_sequence;
                             const extAction = {
                                 actionOrdinal: actionTrace.action_ordinal,
