@@ -318,10 +318,15 @@ export class HyperionSequentialReader {
             prev_block: resultElement.prev_block
         });
 
+        const prevBlockNum = blockInfo.prev_block.block_num;
+        const prevBlockId = blockInfo.prev_block.block_id;
+
         const blockNum = blockInfo.this_block.block_num;
         const blockId = blockInfo.this_block.block_id;
 
-        this.log('debug', `decodeShipData: #${blockNum} - ${blockId}`);
+        this.log('debug', '[decodeShipData]:');
+        this.log('debug', `prev: #${prevBlockNum} - ${prevBlockId}`);
+        this.log('debug', `this: #${blockNum} - ${blockId}`);
 
         // fork handling;
         if (this.blockHistory.has(blockNum)) {
