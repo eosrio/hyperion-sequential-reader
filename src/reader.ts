@@ -10,9 +10,16 @@ import fetch from "node-fetch";
 import * as process from "process";
 
 import {TimedSet} from "./timedset.js";
+import * as console from "console";
 
-function readerLog(message?: any, ...optionalParams: any[]): void {
-    console.log(`[READER]`, message, ...optionalParams);
+
+function logLevelToInt(level: string) {
+    const levels = [
+      'error', 'warning', 'info', 'debug'
+    ];
+    if (!levels.includes(level))
+        throw new Error(`Unimplemented level ${level}`);
+    return levels.indexOf(level);
 }
 
 const HIST_TIME = 15 * 60 * 1000;  // 15 minutes
@@ -26,6 +33,7 @@ export interface HyperionSequentialReaderOptions {
     startBlock?: number;
     endBlock?: number;
     outputQueueLimit?: number;
+    logLevel?: string;
 }
 
 export class HyperionSequentialReader {
@@ -75,6 +83,7 @@ export class HyperionSequentialReader {
     }> = new Map();
 
     blockHistory: TimedSet<number> = new TimedSet(HIST_TIME);
+    logLevel: string;
 
     api: APIClient;
     shipApi: string;
@@ -91,6 +100,7 @@ export class HyperionSequentialReader {
 
     constructor(private options: HyperionSequentialReaderOptions) {
 
+        this.logLevel = options.logLevel || 'warning';
         this.shipApi = options.shipApi;
         this.ship = new StateHistorySocket(this.shipApi, this.max_payload_mb);
 
@@ -123,7 +133,7 @@ export class HyperionSequentialReader {
             try {
                 await this.processInputQueue(tasks);
             } catch (e) {
-                readerLog(e);
+                this.log('error', e);
                 process.exit();
             }
         }, this.maxMessagesInFlight);
@@ -151,7 +161,7 @@ export class HyperionSequentialReader {
                 if (this.blockCollector.size > 0) {
                     readyPct = (readyblocks * 100 / this.blockCollector.size);
                 }
-                readerLog(`${this.decodedBlockCounter / 2} block/s | Blocks: ${this.blockCollector.size} (${readyPct.toFixed(1)}%) | Actions: ${this.actionRefMap.size} | Deltas: ${this.deltaRefMap.size}`);
+                // this.log('info', `${this.decodedBlockCounter / 2} block/s | Blocks: ${this.blockCollector.size} (${readyPct.toFixed(1)}%) | Actions: ${this.actionRefMap.size} | Deltas: ${this.deltaRefMap.size}`);
                 this.decodedBlockCounter = 0;
             }
         }, 2000);
@@ -164,8 +174,13 @@ export class HyperionSequentialReader {
         }, 1000);
     }
 
+    log(level: string, message?: any, ...optionalParams: any[]): void {
+        if (logLevelToInt(this.logLevel) >= logLevelToInt(level))
+            console.log(`[${(new Date()).toISOString().slice(0, -1)}][READER][${level.toUpperCase()}]`, message, ...optionalParams);
+    }
+
     private async processInputQueue(tasks: any[]) {
-        // readerLog(`Tasks: ${tasks.length} | Decoding Queue: ${this.decodingQueue.length()}`);
+        // this.log('info', `Tasks: ${tasks.length} | Decoding Queue: ${this.decodingQueue.length()}`);
         for (const task of tasks) {
             this.decodingQueue.push(task, null);
         }
@@ -173,7 +188,7 @@ export class HyperionSequentialReader {
             this.paused = true;
             this.pendingAck = tasks.length;
             this.inputQueue.pause();
-            readerLog('Reader paused!');
+            this.log('info', 'Reader paused!');
         } else {
             this.ackBlockRange(tasks.length);
         }
@@ -183,12 +198,12 @@ export class HyperionSequentialReader {
         if (this.connecting)
             return;
 
-        readerLog(`Connecting to ${this.shipApi}...`);
+        this.log('info', `Connecting to ${this.shipApi}...`);
         this.connecting = true;
 
         this.ship.connect(
             (data: RawData) => {
-                this.handleShipMessage(data as Buffer).catch(console.log);
+                this.handleShipMessage(data as Buffer).catch((e) => this.log('error', e));
             },
             () => {
                 this.ship.close();
@@ -209,7 +224,7 @@ export class HyperionSequentialReader {
     }
 
     restart() {
-        readerLog("Restarting...");
+        this.log('info', 'Restarting...');
         this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear()
@@ -244,14 +259,14 @@ export class HyperionSequentialReader {
                 try {
                     this.inputQueue.push(result[1], null);
                 } catch (e) {
-                    readerLog('[decodeShipData]', e.message);
-                    readerLog(e);
+                    this.log('error', '[decodeShipData]', e.message);
+                    this.log('error', e);
                 }
                 break;
             }
             case 'get_status_result_v0': {
                 const data = Serializer.objectify(result[1]) as any;
-                readerLog(`Head block: ${data.head.block_num}`);
+                this.log('info', `Head block: ${data.head.block_num}`);
                 if (this.startBlock < 0) {
                     this.startBlock = (this.irreversibleOnly ? data.last_irreversible.block_num : data.head.block_num) + this.startBlock;
                 } else {
@@ -282,7 +297,7 @@ export class HyperionSequentialReader {
     }
 
     private requestBlocks(param: { from: number; to: number }) {
-        readerLog(`Requesting blocks from ${param.from} to ${param.to}`);
+        this.log('info', `Requesting blocks from ${param.from} to ${param.to}`);
         this.send(['get_blocks_request_v0', {
             start_block_num: param.from,
             end_block_num: param.to,
@@ -306,17 +321,31 @@ export class HyperionSequentialReader {
         const blockNum = blockInfo.this_block.block_num;
         const blockId = blockInfo.this_block.block_id;
 
+        this.log('debug', `decodeShipData: #${blockNum} - ${blockId}`);
+
         // fork handling;
         if (this.blockHistory.has(blockNum)) {
             let i = blockNum;
-            console.log('FORK detected!');
-            console.log(`purging block collector from ${i}`);
+            this.log('debug', 'FORK detected!');
+            this.log('debug', 'blockHistory last 40 values before handling:');
+            this.log('debug', this.blockHistory.queue.slice(-40));
+
+            this.log('debug', `purging block collector from ${i}`);
+
             while(this.blockCollector.delete(i))
                 i++;
-            console.log(`done, purged up to ${i}`);
-            console.log(`purging block history from ${blockNum}`);
+
+            this.log('debug', `done, purged up to ${i}`);
+            this.log('debug', `purging block history from ${blockNum}`);
+
             this.blockHistory.deleteFrom(blockNum);
-            console.log('done.')
+
+            this.log('debug', 'blockHistory last 40 values after handling:');
+            this.log('debug', this.blockHistory.queue.slice(-40));
+
+            this.log('debug', `blockHistory has #${blockNum}? ${this.blockHistory.has(blockNum)}`);
+
+            this.log('debug', 'done.');
             this.lastEmittedBlock = 0;
             this.nextBlockRequested = 0;
         }
@@ -375,7 +404,7 @@ export class HyperionSequentialReader {
                         }).filter(r => r !== null);
                         abiRows.forEach((abiRow, index) => {
                             if (this.allowedContracts.has(abiRow.name)) {
-                                readerLog(abiRow.name, `block_num: ${blockNum}`, abiRow.creation_date, `abi hex len: ${abiRow.abi.length}`);
+                                this.log('info', abiRow.name, `block_num: ${blockNum}`, abiRow.creation_date, `abi hex len: ${abiRow.abi.length}`);
                                 if (abiRow.abi.length == 0)
                                     return;
                                 console.time(`abiDecoding-${abiRow.name}-${blockNum}`);
@@ -446,7 +475,7 @@ export class HyperionSequentialReader {
                     for (const at of rt.action_traces) {
                         const actionTrace = at[1];
                         if (actionTrace.receipt === null) {
-                            console.log(`[READER][WARN]: action trace with receipt null! maybe hard_fail'ed deferred tx? block: ${blockNum}`);
+                            this.log('warning', `action trace with receipt null! maybe hard_fail'ed deferred tx? block: ${blockNum}`);
                             continue;
                         }
                         if (this.allowedContracts.has(actionTrace.act.account)) {
@@ -522,7 +551,7 @@ export class HyperionSequentialReader {
             });
             this.dsPool.push(w);
         }
-        readerLog(`Pool created with ${this.dsPool.length} workers`);
+        this.log('info', `Pool created with ${this.dsPool.length} workers`);
     }
 
     private handleWorkerMessage(value: any) {
@@ -531,7 +560,7 @@ export class HyperionSequentialReader {
                 if (!this.abiRequests[value.contract]) {
                     this.abiRequests[value.contract] = true;
                     this.api.v1.chain.get_abi(value.contract).then(abiData => {
-                        readerLog(`Current ABI loaded for ${abiData.account_name}`);
+                        this.log('info', `Current ABI loaded for ${abiData.account_name}`);
                         this.addContract(abiData.account_name, ABI.from(abiData.abi));
                         this.abiRequests[value.contract] = false;
                     });
@@ -584,7 +613,8 @@ export class HyperionSequentialReader {
         const block = this.blockCollector.get(data.blockNum);
         const blockId = block.blockInfo.this_block.block_id;
         if (blockId != data.blockId) {
-            console.log(
+            this.log(
+                'warning',
                 `discarding data due to fork on block #${data.blockNum}, data id: ${data.blockId}, collector id: ${blockId}`);
             return
         }
@@ -601,7 +631,8 @@ export class HyperionSequentialReader {
         const block = this.blockCollector.get(data.blockNum);
         const blockId = block.blockInfo.this_block.block_id;
         if (blockId != data.blockId) {
-            console.log(
+            this.log(
+                'warning',
                 `discarding data due to fork on block #${data.blockNum}, data id: ${data.blockId}, collector id: ${blockId}`);
             return
         }
@@ -635,6 +666,6 @@ export class HyperionSequentialReader {
         this.inputQueue.resume();
         this.paused = false;
         this.ackBlockRange(this.pendingAck);
-        readerLog('Reader resumed!');
+        this.log('info', 'Reader resumed!');
     }
 }
