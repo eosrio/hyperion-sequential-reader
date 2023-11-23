@@ -486,7 +486,7 @@ export class HyperionSequentialReader {
                         if (this.allowedContracts.has(actionTrace.act.account)) {
                             const abiActionNames = [];
                             this.allowedContracts.get(actionTrace.act.account).actions.forEach((obj) => {
-                                abiActionNames.push(obj.name);
+                                abiActionNames.push(obj.name.toString());
                             });
                             if (!abiActionNames.includes(actionTrace.act.name)) {
                                 this.log(
