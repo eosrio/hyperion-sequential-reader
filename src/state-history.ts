@@ -16,7 +16,6 @@ export class StateHistorySocket {
 	}
 
 	connect(onMessage, onDisconnect, onError, onConnected) {
-		console.log(`Connecting to ${this.shipUrl}...`);
 		this.ws = new WebSocket(this.shipUrl, {
 			perMessageDeflate: false,
 			maxPayload: this.max_payload_mb * 1024 * 1024,

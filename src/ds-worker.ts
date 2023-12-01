@@ -75,7 +75,12 @@ function processAction(message: any) {
     const abi = contracts.get(act.account);
     if (abi) {
         try {
-            const decodedActData = Serializer.decode({data: act.data, type: act.name, abi});
+            const decodedActData = Serializer.decode({
+                data: act.data,
+                type: act.name,
+                ignoreInvalidUTF8: true,
+                abi
+            });
             if (decodedActData) {
                 act.data = decodedActData;
                 parentPort.postMessage({
