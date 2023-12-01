@@ -9,7 +9,7 @@ import {cargo, queue, QueueObject} from "async";
 import fetch from "node-fetch";
 import * as process from "process";
 
-import {TimedSet} from "./timedset.js";
+import {OrderedSet} from "./orderedset.js";
 import * as console from "console";
 
 
@@ -82,7 +82,7 @@ export class HyperionSequentialReader {
         deltas: any[]
     }> = new Map();
 
-    blockHistory: TimedSet<number> = new TimedSet(HIST_TIME);
+    blockHistory: OrderedSet<number> = new OrderedSet(HIST_TIME);
     logLevel: string;
 
     api: APIClient;
@@ -356,7 +356,6 @@ export class HyperionSequentialReader {
         }
 
         this.blockHistory.add(blockNum);
-        this.blockHistory.tick();
 
         if (resultElement.block && blockNum) {
 
