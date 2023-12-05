@@ -22,7 +22,7 @@ function logLevelToInt(level: string) {
     return levels.indexOf(level);
 }
 
-const HIST_TIME = 15 * 60 * 1000;  // 15 minutes
+const HIST_TIME = 15 * 60 * 2;  // 15 minutes in blocks
 
 export interface HyperionSequentialReaderOptions {
     shipApi: string;
@@ -30,6 +30,7 @@ export interface HyperionSequentialReaderOptions {
     poolSize: number;
     irreversibleOnly?: boolean;
     blockConcurrency?: number;
+    blockHistorySize?: number;
     startBlock?: number;
     endBlock?: number;
     outputQueueLimit?: number;
@@ -82,7 +83,8 @@ export class HyperionSequentialReader {
         deltas: any[]
     }> = new Map();
 
-    blockHistory: OrderedSet<number> = new OrderedSet(HIST_TIME);
+    blockHistory: OrderedSet<number>;
+    blockHistorySize: number;
     logLevel: string;
 
     api: APIClient;
@@ -103,6 +105,9 @@ export class HyperionSequentialReader {
         this.logLevel = options.logLevel || 'warning';
         this.shipApi = options.shipApi;
         this.ship = new StateHistorySocket(this.shipApi, this.max_payload_mb);
+
+        this.blockHistorySize = options.blockHistorySize || HIST_TIME;
+        this.blockHistory = new OrderedSet<number>(this.blockHistorySize);
 
         this.api = new APIClient({
             url: options.chainApi,
