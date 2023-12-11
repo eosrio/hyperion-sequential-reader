@@ -231,20 +231,20 @@ export class HyperionSequentialReader {
         );
     }
 
-    stop() {
+   async stop() {
         this.log('info', 'Stopping...');
         clearInterval(this._reporterTask);
         clearInterval(this._resumerTask);
-        this.ship.close();
+        await this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear();
         this.blockCollector.clear();
         this.dsPool.forEach((worker) => worker.terminate());
     }
 
-    restart() {
+    async restart() {
         this.log('info', 'Restarting...');
-        this.ship.close();
+        await this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear()
         this.blockCollector.clear()

@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import console from "console";
 
 export class StateHistorySocket {
 	private ws;
@@ -37,8 +38,22 @@ export class StateHistorySocket {
 		});
 	}
 
-	close() {
-		this.ws.close();
+	async close(): Promise<void> {
+		this.ws.clients.forEach((client: WebSocket) => {
+			if (client.readyState === WebSocket.OPEN) {
+				client.close();
+			}
+		});
+		return new Promise((resolve, reject) => {
+			this.ws.close((error) => {
+				if (error) {
+					console.error('Error closing WebSocket server:', error);
+					reject(error);
+				} else {
+					resolve();
+				}
+			});
+		});
 	}
 
 	send(payload) {
