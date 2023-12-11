@@ -235,7 +235,7 @@ export class HyperionSequentialReader {
         this.log('info', 'Stopping...');
         clearInterval(this._reporterTask);
         clearInterval(this._resumerTask);
-        await this.ship.close();
+        this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear();
         this.blockCollector.clear();
@@ -244,7 +244,7 @@ export class HyperionSequentialReader {
 
     async restart() {
         this.log('info', 'Restarting...');
-        await this.ship.close();
+        this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear()
         this.blockCollector.clear()
