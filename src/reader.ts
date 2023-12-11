@@ -100,6 +100,9 @@ export class HyperionSequentialReader {
     onDisconnect: () => void = null;
     onError: (err) => void = null;
 
+    private _reporterTask;
+    private _resumerTask;
+
     constructor(private options: HyperionSequentialReaderOptions) {
 
         this.logLevel = options.logLevel || 'warning';
@@ -154,7 +157,7 @@ export class HyperionSequentialReader {
         }, this.blockConcurrency);
 
         // Report average processing speed each 10s
-        setInterval(() => {
+        this._reporterTask = setInterval(() => {
             if (this.decodedBlockCounter > 0) {
                 let readyblocks = 0;
                 let readyPct = 0;
@@ -172,7 +175,7 @@ export class HyperionSequentialReader {
         }, 2000);
 
         // Check if output queue is whitin limits
-        setInterval(() => {
+        this._resumerTask = setInterval(() => {
             if (this.blockCollector.size < this.outputQueueLimit && this.paused) {
                 this.resumeReading();
             }
@@ -226,6 +229,17 @@ export class HyperionSequentialReader {
                 this.connecting = false;
             }
         );
+    }
+
+    stop() {
+        this.log('info', 'Stopping...');
+        clearInterval(this._reporterTask);
+        clearInterval(this._resumerTask);
+        this.ship.close();
+        this.shipAbiReady = false;
+        this.blockHistory.clear();
+        this.blockCollector.clear();
+        this.dsPool.forEach((worker) => worker.terminate());
     }
 
     restart() {
