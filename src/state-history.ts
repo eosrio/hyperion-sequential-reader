@@ -5,7 +5,7 @@ export class StateHistorySocket {
 	private readonly shipUrl;
 	private readonly max_payload_mb;
 
-	connected = false;
+	private connected = false;
 
 	private onMessage;
 
@@ -19,11 +19,9 @@ export class StateHistorySocket {
 	}
 
 	connect(onMessage, onDisconnect, onError, onConnected) {
-		this.onMessage = function (msg) {
-			if (!this.connected)
-				return;
-
-			return onMessage(msg)
+		this.onMessage = (msg) => {
+			if (this.connected)
+				return onMessage(msg);
 		};
 		this.ws = new WebSocket(this.shipUrl, {
 			perMessageDeflate: false,
@@ -36,7 +34,7 @@ export class StateHistorySocket {
 		});
 		this.ws.on('message', this.onMessage);
 		this.ws.on('close', () => {
-			this.connected = false;
+			this.close();
             if (onDisconnect)
     			onDisconnect();
 		});

@@ -214,7 +214,6 @@ export class HyperionSequentialReader {
                 this.handleShipMessage(data as Buffer).catch((e) => this.log('error', e));
             },
             () => {
-                this.ship.close();
                 this.shipAbiReady = false;
                 if (this.onDisconnect)
                     this.onDisconnect();
@@ -231,7 +230,7 @@ export class HyperionSequentialReader {
         );
     }
 
-   async stop() {
+   stop() {
         this.log('info', 'Stopping...');
         clearInterval(this._reporterTask);
         clearInterval(this._resumerTask);
@@ -242,7 +241,7 @@ export class HyperionSequentialReader {
         this.dsPool.forEach((worker) => worker.terminate());
     }
 
-    async restart() {
+    restart() {
         this.log('info', 'Restarting...');
         this.ship.close();
         this.shipAbiReady = false;
