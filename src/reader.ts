@@ -241,7 +241,7 @@ export class HyperionSequentialReader {
         this.dsPool.forEach((worker) => worker.terminate());
     }
 
-    restart() {
+    restart(ms: number = 3000) {
         this.log('info', 'Restarting...');
         this.ship.close();
         this.shipAbiReady = false;
@@ -251,7 +251,7 @@ export class HyperionSequentialReader {
             this.reconnectCount++;
             this.startBlock = this.lastEmittedBlock + 1;
             this.start();
-        }, 5000);
+        }, ms);
     }
 
     private send(param: (string | any)[]) {
