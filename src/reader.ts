@@ -219,6 +219,7 @@ export class HyperionSequentialReader {
                     this.onDisconnect();
             },
             (err) => {
+                this.connecting = false;
                 if (this.onError)
                     this.onError(err);
             },

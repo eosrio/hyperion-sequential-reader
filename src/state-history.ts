@@ -36,6 +36,7 @@ export class StateHistorySocket {
     			onDisconnect();
 		});
 		this.ws.on('error', (err) => {
+			this.connected = false;
             if (onError)
                 onError(err);
 		});
