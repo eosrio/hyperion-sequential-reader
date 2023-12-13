@@ -214,12 +214,14 @@ export class HyperionSequentialReader {
                 this.handleShipMessage(data as Buffer).catch((e) => this.log('error', e));
             },
             () => {
+                this.connecting = false;
                 this.shipAbiReady = false;
                 if (this.onDisconnect)
                     this.onDisconnect();
             },
             (err) => {
                 this.connecting = false;
+                this.shipAbiReady = false;
                 if (this.onError)
                     this.onError(err);
             },
