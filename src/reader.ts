@@ -204,7 +204,7 @@ export class HyperionSequentialReader {
 
     start() {
         if (this.connecting)
-            return;
+            throw new Error('Reader already connecting');
 
         this.log('info', `Connecting to ${this.shipApi}...`);
         this.connecting = true;
@@ -223,9 +223,9 @@ export class HyperionSequentialReader {
                     this.onError(err);
             },
             () => {
+                this.connecting = false;
                 if (this.onConnected)
                     this.onConnected();
-                this.connecting = false;
             }
         );
     }
