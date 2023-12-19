@@ -646,6 +646,10 @@ export class HyperionSequentialReader {
         const refAction = this.actionRefMap.get(data.gs);
         refAction.act.data = data.act.data;
         const block = this.blockCollector.get(data.blockNum);
+        if (!block) {
+            this.log('warning', 'collect delta called but block is undefined');
+            return;
+        }
         const blockId = block.blockInfo.this_block.block_id;
         if (blockId != data.blockId) {
             this.log(
@@ -664,6 +668,10 @@ export class HyperionSequentialReader {
         const refDelta = this.deltaRefMap.get(key);
         refDelta.value = data.value;
         const block = this.blockCollector.get(data.blockNum);
+        if (!block) {
+            this.log('warning', 'collect delta called but block is undefined');
+            return;
+        }
         const blockId = block.blockInfo.this_block.block_id;
         if (blockId != data.blockId) {
             this.log(
