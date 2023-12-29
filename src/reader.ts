@@ -22,7 +22,7 @@ function logLevelToInt(level: string) {
     return levels.indexOf(level);
 }
 
-const HIST_TIME = 15 * 60 * 1000;  // 15 minutes
+const HIST_TIME = 15 * 60 * 2;  // 15 minutes in blocks
 
 export interface HyperionSequentialReaderOptions {
     shipApi: string;
@@ -30,6 +30,7 @@ export interface HyperionSequentialReaderOptions {
     poolSize: number;
     irreversibleOnly?: boolean;
     blockConcurrency?: number;
+    blockHistorySize?: number;
     startBlock?: number;
     endBlock?: number;
     outputQueueLimit?: number;
@@ -82,7 +83,8 @@ export class HyperionSequentialReader {
         deltas: any[]
     }> = new Map();
 
-    blockHistory: OrderedSet<number> = new OrderedSet(HIST_TIME);
+    blockHistory: OrderedSet<number>;
+    blockHistorySize: number;
     logLevel: string;
 
     api: APIClient;
@@ -98,11 +100,17 @@ export class HyperionSequentialReader {
     onDisconnect: () => void = null;
     onError: (err) => void = null;
 
+    private _reporterTask;
+    private _resumerTask;
+
     constructor(private options: HyperionSequentialReaderOptions) {
 
         this.logLevel = options.logLevel || 'warning';
         this.shipApi = options.shipApi;
         this.ship = new StateHistorySocket(this.shipApi, this.max_payload_mb);
+
+        this.blockHistorySize = options.blockHistorySize || HIST_TIME;
+        this.blockHistory = new OrderedSet<number>(this.blockHistorySize);
 
         this.api = new APIClient({
             url: options.chainApi,
@@ -149,7 +157,7 @@ export class HyperionSequentialReader {
         }, this.blockConcurrency);
 
         // Report average processing speed each 10s
-        setInterval(() => {
+        this._reporterTask = setInterval(() => {
             if (this.decodedBlockCounter > 0) {
                 let readyblocks = 0;
                 let readyPct = 0;
@@ -167,7 +175,7 @@ export class HyperionSequentialReader {
         }, 2000);
 
         // Check if output queue is whitin limits
-        setInterval(() => {
+        this._resumerTask = setInterval(() => {
             if (this.blockCollector.size < this.outputQueueLimit && this.paused) {
                 this.resumeReading();
             }
@@ -196,7 +204,7 @@ export class HyperionSequentialReader {
 
     start() {
         if (this.connecting)
-            return;
+            throw new Error('Reader already connecting');
 
         this.log('info', `Connecting to ${this.shipApi}...`);
         this.connecting = true;
@@ -206,24 +214,37 @@ export class HyperionSequentialReader {
                 this.handleShipMessage(data as Buffer).catch((e) => this.log('error', e));
             },
             () => {
-                this.ship.close();
+                this.connecting = false;
                 this.shipAbiReady = false;
                 if (this.onDisconnect)
                     this.onDisconnect();
             },
             (err) => {
+                this.connecting = false;
+                this.shipAbiReady = false;
                 if (this.onError)
                     this.onError(err);
             },
             () => {
+                this.connecting = false;
                 if (this.onConnected)
                     this.onConnected();
-                this.connecting = false;
             }
         );
     }
 
-    restart() {
+   stop() {
+        this.log('info', 'Stopping...');
+        clearInterval(this._reporterTask);
+        clearInterval(this._resumerTask);
+        this.ship.close();
+        this.shipAbiReady = false;
+        this.blockHistory.clear();
+        this.blockCollector.clear();
+        this.dsPool.forEach((worker) => worker.terminate());
+    }
+
+    restart(ms: number = 3000) {
         this.log('info', 'Restarting...');
         this.ship.close();
         this.shipAbiReady = false;
@@ -233,7 +254,7 @@ export class HyperionSequentialReader {
             this.reconnectCount++;
             this.startBlock = this.lastEmittedBlock + 1;
             this.start();
-        }, 5000);
+        }, ms);
     }
 
     private send(param: (string | any)[]) {
@@ -625,6 +646,10 @@ export class HyperionSequentialReader {
         const refAction = this.actionRefMap.get(data.gs);
         refAction.act.data = data.act.data;
         const block = this.blockCollector.get(data.blockNum);
+        if (!block) {
+            this.log('warning', 'collect delta called but block is undefined');
+            return;
+        }
         const blockId = block.blockInfo.this_block.block_id;
         if (blockId != data.blockId) {
             this.log(
@@ -643,6 +668,10 @@ export class HyperionSequentialReader {
         const refDelta = this.deltaRefMap.get(key);
         refDelta.value = data.value;
         const block = this.blockCollector.get(data.blockNum);
+        if (!block) {
+            this.log('warning', 'collect delta called but block is undefined');
+            return;
+        }
         const blockId = block.blockInfo.this_block.block_id;
         if (blockId != data.blockId) {
             this.log(

@@ -1,7 +1,7 @@
 {
   "name": "@eosrio/hyperion-sequential-reader",
   "repository": "eosrio/hyperion-sequential-reader",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "",
   "main": "./lib/esm/index.js",
   "types": "./lib/esm/index.d.ts",
@@ -15,9 +15,7 @@
   },
   "type": "module",
   "scripts": {
-    "start": "nodemon dist/main.js",
     "build": "tsc && node scripts/create-dist-packages.mjs",
-    "build:watch": "tsc --watch",
     "release": "npm run build && npm pack --pack-destination packages",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

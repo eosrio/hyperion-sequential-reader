@@ -4,7 +4,8 @@ export class StateHistorySocket {
 	private ws;
 	private readonly shipUrl;
 	private readonly max_payload_mb;
-	connected = false;
+
+	private connected = false;
 
 	constructor(ship_url, max_payload_mb) {
 		this.shipUrl = ship_url;
@@ -25,19 +26,24 @@ export class StateHistorySocket {
 			if (onConnected)
 				onConnected();
 		});
-		this.ws.on('message', (data) => onMessage(data));
+		this.ws.on('message', (msg) => {
+			if (this.connected)
+				onMessage(msg);
+		});
 		this.ws.on('close', () => {
-			this.connected = false;
-            if (onDisconnect)
+            this.connected = false;
+			if (onDisconnect)
     			onDisconnect();
 		});
 		this.ws.on('error', (err) => {
+			this.connected = false;
             if (onError)
                 onError(err);
 		});
 	}
 
 	close() {
+		this.connected = false;
 		this.ws.close();
 	}
 
