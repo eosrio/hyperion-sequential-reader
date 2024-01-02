@@ -1,45 +1,76 @@
 import {parentPort, workerData} from "worker_threads";
 import {ABI, Serializer} from "@greymass/eosio";
 import * as console from "console";
+import {logLevelToInt} from "./utils.js";
 
 const contracts: Map<string, ABI> = new Map();
-let shipAbi: ABI;
 
-const failedDSMap: Map<string, any[]> = new Map();
-
-function workerLog(message?: any, ...optionalParams: any[]): void {
-    console.log(`[WORKER ${workerData.wIndex}]`, message, ...optionalParams);
-}
-
-function addToFailedDS(contract: string, message: any) {
-    if (!message.errorCounter) {
-        message.errorCounter = 1;
-    } else {
-        message.errorCounter++;
-    }
-    if (failedDSMap.has(contract)) {
-        failedDSMap.get(contract).push(message);
-    } else {
-        failedDSMap.set(contract, [message]);
-        if (message.errorCounter === 1) {
-            parentPort.postMessage({event: 'request_head_abi', contract});
-        }
-    }
-    // workerLog(`Failed deserializations for ${contract}: ${failedDSMap.get(contract)?.length}`)
-}
-
-function checkFailed(contract: string) {
-    const messages = failedDSMap.get(contract);
-    if (messages && messages.length > 0) {
-        // workerLog('Re-trying failed messages');
-        while (messages.length > 0) {
-            processMessage(messages.shift());
-        }
+function workerLog(level: string, message?: any, ...optionalParams: any[]): void {
+    if (logLevelToInt(workerData.logLevel) >= logLevelToInt(level)) {
+        const timestampHeader = `[${(new Date()).toISOString().slice(0, -1)}]`;
+        const workerHeader = `[WORKER ${workerData.wIndex}]`;
+        const levelHeader = `[${level.toUpperCase()}]`;
+        console.log([timestampHeader, workerHeader, levelHeader].join(''), message, ...optionalParams);
     }
 }
 
-function processDelta(message: any) {
-    const delta = message.content.extDelta;
+export interface DSMessage {
+    index: number;  // action or delta index relative to block
+    blockId: string;
+    blockNum: number;
+    data: any;
+}
+
+export interface DeltaDSMessage extends DSMessage {
+    data: {
+        code: string;
+        table: string;
+        value: string;
+    }
+}
+
+export interface ActionDSMessage extends DSMessage {
+    data: {
+        account: string;
+        name: string;
+        data: string;
+    }
+}
+
+export interface DeltaResponseDSMessage extends DSMessage {
+    data: {
+        code: string;
+        table: string;
+        value: any;
+    }
+}
+
+export interface ActionResponseDSMessage extends DSMessage {
+    data: {
+        account: string;
+        name: string;
+        data: any;
+    }
+}
+
+export interface ParentMessage {
+    abi?: {
+        account: string;
+        obj: ABI;
+    };
+    delta?: DeltaDSMessage;
+    action?: ActionDSMessage;
+}
+
+export interface WorkerMessage {
+    index: number;  // worker index
+    abi?: { account: string };
+    delta?: DeltaResponseDSMessage;
+    action?: ActionResponseDSMessage;
+}
+
+function processDelta(message: DeltaDSMessage): DeltaResponseDSMessage {
+    const delta = message.data;
     if (contracts.has(delta.code)) {
         const abi = contracts.get(delta.code);
         if (abi) {
@@ -47,79 +78,82 @@ function processDelta(message: any) {
             if (type) {
                 try {
                     const dsValue = Serializer.decode({data: delta.value, type, abi});
-                    parentPort.postMessage({
-                        event: 'decoded_delta',
-                        wIndex: workerData.wIndex,
+                    return {
+                        ...message,
                         data: {
-                            index: message.content.index,
-                            blockNum: message.content.blockNum,
-                            blockId: message.content.blockId,
+                            ...message.data,
                             value: Serializer.objectify(dsValue)
                         }
-                    });
-                    return;
+                    };
+
                 } catch (e) {
-                    workerLog(e.message, delta.code, delta.table);
+                    workerLog('error', e.message, delta.code, delta.table);
                 }
             } else {
-                // workerLog(`Missing ABI type for table ${delta.table} of ${delta.code}`);
+                workerLog('error', `Missing ABI type for table ${delta.table} of ${delta.code}`);
             }
         }
     }
-    addToFailedDS(delta.code, message);
+    // addToFailedDS(delta.code, message);
+    throw new Error(`Failed to process delta ${delta.code}: ${JSON.stringify(message)}`);
 }
 
-function processAction(message: any) {
-    const act = message.data.act;
-    const blockId = message.data.blockId;
-    const abi = contracts.get(act.account);
+function processAction(message: ActionDSMessage): ActionResponseDSMessage {
+    const action = message.data;
+    const abi = contracts.get(action.account);
     if (abi) {
         try {
             const decodedActData = Serializer.decode({
-                data: act.data,
-                type: act.name,
+                data: action.data,
+                type: action.name,
                 ignoreInvalidUTF8: true,
                 abi
             });
             if (decodedActData) {
-                act.data = decodedActData;
-                parentPort.postMessage({
-                    event: 'decoded_action',
-                    wIndex: workerData.wIndex,
+                return {
+                    ...message,
                     data: {
-                        blockId,
-                        ...Serializer.objectify(message.data)
+                        ...message.data,
+                        data: decodedActData
                     }
-                });
-                return;
+                };
             }
         } catch (e) {
-            workerLog(e.message, message.data);
+            workerLog('error', e.message, message);
         }
     }
-    addToFailedDS(act.account, message);
+    throw new Error(`Failed to process action ${JSON.stringify(action)}`);
 }
 
-function processMessage(msg: any) {
-    switch (msg.event) {
-        case 'set_abi': {
-            contracts.set(msg.data.account, ABI.from(msg.data.abi));
-            checkFailed(msg.data.account);
-            break;
-        }
-        case 'set_ship_abi': {
-            shipAbi = msg.data.abi;
-            break;
-        }
-        case 'delta': {
-            processDelta(msg);
-            break;
-        }
-        case 'action': {
-            processAction(msg);
-            break;
-        }
+function processMessage(msg: ParentMessage) {
+    let response: WorkerMessage = {
+        index: workerData.wIndex
+    };
+    if (msg.abi) {
+        const abi = ABI.from(msg.abi.obj);
+        const account = msg.abi.account;
+        contracts.set(account, abi);
+
+        response.abi = {account: account};
+        workerLog('debug', `abi set for ${msg.abi.account}`);
     }
+    if (msg.delta) {
+        response.delta = processDelta(msg.delta);
+        workerLog(
+            'debug',
+            `ds delta ${msg.delta.data.code}::${msg.delta.data.table} index: ${msg.delta.index} block_num: ${msg.delta.blockNum}`
+        );
+    }
+
+    if (msg.action) {
+        response.action = processAction(msg.action);
+        workerLog(
+            'debug',
+            `ds action ${msg.action.data.account}::${msg.action.data.name} index: ${msg.action.index} block_num: ${msg.action.blockNum}`
+        );
+    }
+
+    parentPort.postMessage(response);
 }
 
 parentPort.on("message", value => {
