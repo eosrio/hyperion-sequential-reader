@@ -7,7 +7,7 @@ import fetch from "node-fetch";
 import * as process from "process";
 import * as console from "console";
 
-import {addOnBlockToABI, logLevelToInt, sleep} from "./utils.js";
+import {addOnBlockToABI, logLevelToInt} from "./utils.js";
 import {ActionDSMessage, ActionDSResponse, DeltaDSMessage, DeltaDSResponse} from "./ds-worker.js";
 import {SharedObject, SharedObjectStore} from "./shm.js";
 import {StateHistorySocket} from "./state-history.js";
