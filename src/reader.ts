@@ -1,19 +1,20 @@
 import {RawData} from "ws";
-import {StateHistorySocket} from "./state-history.js";
-import {ABI, ABIDecoder, APIClient, Serializer} from "@greymass/eosio";
 import {EventEmitter} from "events";
-import {Worker} from "worker_threads";
 import * as path from "path";
 import {fileURLToPath} from "node:url";
 import {cargo, queue, QueueObject} from "async";
 import fetch from "node-fetch";
 import * as process from "process";
-
-import {OrderedSet} from "./orderedset.js";
 import * as console from "console";
-import {addOnBlockToABI, logLevelToInt, sleep} from "./utils.js";
-import {ActionResponseDSMessage, DeltaResponseDSMessage, ParentMessage, WorkerMessage} from "./ds-worker";
 
+import {addOnBlockToABI, logLevelToInt, sleep} from "./utils.js";
+import {ActionDSMessage, ActionDSResponse, DeltaDSMessage, DeltaDSResponse} from "./ds-worker.js";
+import {SharedObject, SharedObjectStore} from "./shm.js";
+import {StateHistorySocket} from "./state-history.js";
+import {OrderedSet} from "./orderedset.js";
+
+import {ABI, ABIDecoder, APIClient, Serializer} from "@greymass/eosio";
+import workerpool, {Pool} from "workerpool";
 
 const HIST_TIME = 15 * 60 * 2;  // 15 minutes in blocks
 
@@ -32,12 +33,16 @@ export interface HyperionSequentialReaderOptions {
     workerLogLevel?: string;
     maxPayloadMb?: number;
     actionWhitelist?: {[key: string]: string[]};  // key is code name, value is list of actions
-    tableWhitelist?: {[key: string]: string[]};   // key is code name, value is list of tables
+    tableWhitelist?: {[key: string]: string[]};   // key is code name, value is list of tables,
+    speedMeasureConf?: {
+        windowSize: number;
+        stride: number;
+    };
 }
 
 export class HyperionSequentialReader {
     ship: StateHistorySocket;
-    max_payload_mb;
+    max_payload_mb: number;
     reconnectCount = 0;
     private connecting = false;
     private shipAbi?: ABI;
@@ -47,8 +52,9 @@ export class HyperionSequentialReader {
     private totalWorkerABILoaded = 0;
     private targetWorkerABILoaded = 0;
 
-    private dsPool: Worker[] = [];
-    private nextWorkerIndex = 0;
+    private dsPool: Pool;
+
+    private sharedABIStore: SharedObjectStore<ABI.Def>;
 
     private contracts: Map<string, ABI> = new Map();
     private actionWhitelist: Map<string, string[]>;
@@ -65,9 +71,15 @@ export class HyperionSequentialReader {
     inputQueue: QueueObject<any>;
     decodingQueue: QueueObject<any>;
 
-    private decodedBlockCounter = 0;
     private pendingAck = 0;
     private paused = false;
+
+    private emitedSinceLastMeasure: number = 0;
+    private speedMeasurements: [number, number][] = [];
+    private averageSpeed: number = 0;
+
+    private speedMeasureWindowSize: number;
+    private speedMeasureStride: number;
 
     // block collector map
     blockCollector: Map<number, {
@@ -99,14 +111,13 @@ export class HyperionSequentialReader {
     private deltaRefMap: Map<string, any> = new Map();
     private lastEmittedBlock: number;
     private nextBlockRequested = 0;
-    private irreversibleOnly;
+    private irreversibleOnly: boolean;
 
     onConnected: () => void = null;
     onDisconnect: () => void = null;
     onError: (err) => void = null;
 
-    private _reporterTask;
-    private _resumerTask;
+    private _resumerTask: NodeJS.Timer;
 
     constructor(private options: HyperionSequentialReaderOptions) {
 
@@ -117,6 +128,9 @@ export class HyperionSequentialReader {
 
         this.blockHistorySize = options.blockHistorySize || HIST_TIME;
         this.blockHistory = new OrderedSet<number>(this.blockHistorySize);
+
+        // placeholder store
+        this.sharedABIStore = new SharedObjectStore({bufferLengthBytes: 0});
 
         this.api = new APIClient({
             url: options.chainApi,
@@ -155,6 +169,16 @@ export class HyperionSequentialReader {
         if (options.tableWhitelist)
             this.tableWhitelist = new Map(Object.entries(options.tableWhitelist));
 
+        this.speedMeasureStride = 1000;
+        this.speedMeasureWindowSize = 5;
+        if (options.speedMeasureConf) {
+            if (options.speedMeasureConf.windowSize)
+                this.speedMeasureWindowSize = options.speedMeasureConf.windowSize;
+
+            if (options.speedMeasureConf.stride)
+                this.speedMeasureStride = options.speedMeasureConf.stride;
+        }
+
         // Initial Reading Queue
         this.inputQueue = cargo(async (tasks) => {
             try {
@@ -168,30 +192,11 @@ export class HyperionSequentialReader {
         // Parallel Decoding Queue
         this.decodingQueue = queue(async (task) => {
             await this.decodeShipData(task);
-            this.decodedBlockCounter++;
             // readerLog(`[${blockNum}] Decoding Queue: ${this.decodingQueue.length()} | Paused: ${this.paused}`);
             if ((this.decodingQueue.length() < this.inputQueueLimit && this.blockCollector.size < this.outputQueueLimit) && this.paused) {
                 this.resumeReading();
             }
         }, this.blockConcurrency);
-
-        // Report average processing speed each 10s
-        this._reporterTask = setInterval(() => {
-            if (this.decodedBlockCounter > 0) {
-                let readyblocks = 0;
-                let readyPct = 0;
-                this.blockCollector.forEach(value => {
-                    if (value.ready) {
-                        readyblocks++;
-                    }
-                });
-                if (this.blockCollector.size > 0) {
-                    readyPct = (readyblocks * 100 / this.blockCollector.size);
-                }
-                // this.log('info', `${this.decodedBlockCounter / 2} block/s | Blocks: ${this.blockCollector.size} (${readyPct.toFixed(1)}%) | Actions: ${this.actionRefMap.size} | Deltas: ${this.deltaRefMap.size}`);
-                this.decodedBlockCounter = 0;
-            }
-        }, 2000);
 
         // Check if output queue is whitin limits
         this._resumerTask = setInterval(() => {
@@ -234,6 +239,10 @@ export class HyperionSequentialReader {
             console.log(`[${(new Date()).toISOString().slice(0, -1)}][READER][${level.toUpperCase()}]`, message, ...optionalParams);
     }
 
+    get avgSpeed() {
+        return this.averageSpeed;
+    }
+
     private async processInputQueue(tasks: any[]) {
         // this.log('info', `Tasks: ${tasks.length} | Decoding Queue: ${this.decodingQueue.length()}`);
         for (const task of tasks) {
@@ -254,7 +263,7 @@ export class HyperionSequentialReader {
             throw new Error('Reader already connecting');
 
         // check if target node is up & contains requested range
-        const chainInfo = await this.api.v1.chain.get_info();
+        await this.api.v1.chain.get_info();
 
         if (this.startBlock > 0)
             await this.api.v1.chain.get_block(this.startBlock);
@@ -299,15 +308,14 @@ export class HyperionSequentialReader {
         );
     }
 
-   stop() {
+   async stop() {
         this.log('info', 'Stopping...');
-        clearInterval(this._reporterTask);
         clearInterval(this._resumerTask);
         this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear();
         this.blockCollector.clear();
-        this.dsPool.forEach((worker) => worker.terminate());
+        await this.dsPool.terminate();
     }
 
     restart(ms: number = 3000) {
@@ -502,7 +510,6 @@ export class HyperionSequentialReader {
                             }
                             return null;
                         }).filter(r => r !== null);
-                        const abiTasks = [];
                         abiRows.forEach((abiRow) => {
                             if (this.contracts.has(abiRow.name)) {
                                 this.log('info', abiRow.name, `block_num: ${blockNum}`, abiRow.creation_date, `abi hex len: ${abiRow.abi.length}`);
@@ -512,10 +519,9 @@ export class HyperionSequentialReader {
                                 const abiBin = new Uint8Array(Buffer.from(abiRow.abi, 'hex'));
                                 const abi = ABI.fromABI(new ABIDecoder(abiBin));
                                 console.timeEnd(`abiDecoding-${abiRow.name}-${blockNum}`);
-                                abiTasks.push(this.addContract(abiRow.name, abi));
+                                this.addContract(abiRow.name, abi);
                             }
                         });
-                        await Promise.all(abiTasks);
                     }
 
 
@@ -535,11 +541,19 @@ export class HyperionSequentialReader {
                                 const key = `${blockNum}:${index}`;
                                 this.deltaRefMap.set(key, extDelta);
                                 extendedDeltas.push(this.deltaRefMap.get(key));
-                                this.sendWorkerMessage({
-                                    delta: {
-                                        index, blockId, blockNum,
-                                        data: extDelta
-                                    }
+                                const deltaDSParams: DeltaDSMessage = {
+                                    shmRef: this.sharedABIStore.sharedMem,
+                                    memMap: this.sharedABIStore.getMemoryMap(),
+                                    index, blockId, blockNum,
+                                    data: extDelta
+                                };
+                                this.dsPool.exec('processDelta', [deltaDSParams]).then((delta: DeltaDSResponse) => {
+                                    this.collectDelta(delta);
+                                }).catch((error) => {
+                                    this.log('error', 'processDelta call errored out!');
+                                    this.log('error', error.message);
+                                    this.log('error', error.stack);
+                                    throw new Error(error);
                                 });
                             }
                         });
@@ -597,11 +611,19 @@ export class HyperionSequentialReader {
                             };
                             this.actionRefMap.set(gs, extAction);
                             extendedActions.push(this.actionRefMap.get(gs));
-                            this.sendWorkerMessage({
-                                action: {
-                                    index: gs, blockId, blockNum,
-                                    data: actionTrace.act
-                                }
+                            const actionDSParams: ActionDSMessage = {
+                                shmRef: this.sharedABIStore.sharedMem,
+                                memMap: this.sharedABIStore.getMemoryMap(),
+                                index: gs, blockId, blockNum,
+                                data: actionTrace.act
+                            };
+                            this.dsPool.exec('processAction', [actionDSParams]).then((action: ActionDSResponse) => {
+                                this.collectAction(action);
+                            }).catch((error) => {
+                                this.log('error', 'process callAction errored out!');
+                                this.log('error', error.message);
+                                this.log('error', error.stack);
+                                throw new Error(error);
                             });
                         }
                     }
@@ -633,66 +655,52 @@ export class HyperionSequentialReader {
     }
 
     createWorkers(param: { poolSize: number, logLevel: string }) {
-        for (let i = 0; i < param.poolSize; i++) {
-            const __dirname = fileURLToPath(new URL('.', import.meta.url));
-            const w = new Worker(path.join(__dirname, 'ds-worker.js'), {
-                workerData: {
-                    wIndex: i,
-                    logLevel: param.logLevel
-                }
-            });
-            w.on("message", value => {
-                this.handleWorkerMessage(value);
-            });
-            this.dsPool.push(w);
-        }
-        this.log('info', `Pool created with ${this.dsPool.length} workers`);
+        const __dirname = fileURLToPath(new URL('.', import.meta.url));
+        const workerModule = path.join(__dirname, 'ds-worker.js');
+        process.env.WORKER_LOG_LEVEL = param.logLevel;
+        this.dsPool = workerpool.pool(
+            workerModule, {
+                minWorkers: param.poolSize,
+                maxWorkers: param.poolSize,
+                workerType: 'thread'
+        });
+        this.log('info', `Pool created with ${param.poolSize} workers`);
     }
 
-    private sendAllWorkersMessage(msg: ParentMessage) {
-        this.dsPool.forEach(w => w.postMessage(msg));
+    private updateSharedABIStore() {
+        const objectMap: {[keys: string]: SharedObject<ABI.Def>} = {};
+        for (const [account, abi] of this.contracts.entries())
+            objectMap[account] = SharedObject.fromObject<ABI.Def>(abi.toJSON());
+
+        this.sharedABIStore = SharedObjectStore.fromObjects<ABI.Def>(objectMap);
     }
 
-    private sendWorkerMessage(msg: ParentMessage) {
-        this.dsPool[this.nextWorkerIndex++].postMessage(msg);
-        if (this.nextWorkerIndex == this.dsPool.length)
-            this.nextWorkerIndex = 0;
-    }
-
-    private handleWorkerMessage(msg: WorkerMessage) {
-        const wIndex = msg.index;
-
-        if (msg.abi) {
-            this.totalWorkerABILoaded++;
-            this.log('debug', `worker ${wIndex}: abi set ${msg.abi.account}`);
-        }
-        if (msg.delta) {
-            const delta = msg.delta.data;
-            this.collectDelta(msg.delta);
-            this.log('debug', `worker ${wIndex}: collected delta  ${delta.code}::${delta.table}`);
-        }
-        if (msg.action) {
-            const action = msg.action.data;
-            this.collectAction(msg.action);
-            this.log('debug', `worker ${wIndex}: collected action ${action.account}::${action.name}`);
-        }
-    }
-
-    async addContract(account: string, abi: ABI) {
-        this.targetWorkerABILoaded += this.dsPool.length;
+    addContract(account: string, abi: ABI) {
         if (account == 'eosio')
             addOnBlockToABI(abi);
 
         this.contracts.set(account, abi);
-        this.sendAllWorkersMessage({
-           abi: {
-               account: account,
-               obj: Serializer.objectify(abi)
-           }
-        });
+        this.updateSharedABIStore();
+    }
 
-        while(!this.areWorkerAbisReady)
-            await sleep(200);
+    addContracts(contracts: {account: string, abi: ABI}[]) {
+        for (const contract of contracts) {
+            if (contract.account == 'eosio')
+                addOnBlockToABI(contract.abi);
+
+            this.contracts.set(contract.account, contract.abi);
+        }
+        this.updateSharedABIStore();
+    }
+
+    private calculateSpeed() {
+        const startTime = this.speedMeasurements[0][1];
+        const endTime = this.speedMeasurements[this.speedMeasurements.length - 1][1];
+        const msElapsed = endTime - startTime;
+        let totalEmitted = 0;
+        for (const [amount, ts] of this.speedMeasurements)
+            totalEmitted += amount;
+        this.averageSpeed = (totalEmitted / msElapsed) * 1000;
     }
 
     private emitBlock(block) {
@@ -704,11 +712,22 @@ export class HyperionSequentialReader {
             this.nextBlockRequested = 0;
 
         this.events.emit('block', block);
+        this.emitedSinceLastMeasure++;
+
+        // Speed measurement sys
+        if (blockNum % this.speedMeasureStride == 0) {
+            this.speedMeasurements.push([this.emitedSinceLastMeasure, performance.now()])
+            if (this.speedMeasurements.length > this.speedMeasureWindowSize)
+                this.speedMeasurements.shift();
+
+            this.calculateSpeed();
+
+            this.emitedSinceLastMeasure = 0;
+        }
 
         if (blockNum == this.endBlock) {
             this.log('info', `Finished reading range ${this.startBlock} to ${this.endBlock}`);
-            this.stop();
-            this.events.emit('stop');
+            this.stop().then(() => this.events.emit('stop'));
         }
     }
 
@@ -721,7 +740,7 @@ export class HyperionSequentialReader {
             this.nextBlockRequested = this.lastEmittedBlock + 1;
     }
 
-    private collectAction(action: ActionResponseDSMessage) {
+    private collectAction(action: ActionDSResponse) {
         const refAction = this.actionRefMap.get(action.index);
         refAction.act.data = action.data.data;
         const block = this.blockCollector.get(action.blockNum);
@@ -742,7 +761,7 @@ export class HyperionSequentialReader {
         this.checkBlock(block);
     }
 
-    private collectDelta(delta: DeltaResponseDSMessage) {
+    private collectDelta(delta: DeltaDSResponse) {
         const key = `${delta.blockNum}:${delta.index}`;
         const refDelta = this.deltaRefMap.get(key);
         refDelta.value = delta.data.value;

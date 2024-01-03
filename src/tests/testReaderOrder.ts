@@ -2,15 +2,17 @@ import {HyperionSequentialReader} from "../reader.js";
 import {ABI} from "@greymass/eosio";
 import {readFileSync} from "node:fs";
 import {expect} from 'chai';
+import {BSON} from "bson";
+import * as console from "console";
 
 const options = {
     shipApi: 'ws://127.0.0.1:29999',
     chainApi: 'http://127.0.0.1:8888',
-    poolSize: 4,
-    blockConcurrency: 4,
+    poolSize: 8,
+    blockConcurrency: 8,
     blockHistorySize: 1000,
-    inputQueueLimit: 200,
-    outputQueueLimit: 1000,
+    inputQueueLimit: 4000,
+    outputQueueLimit: 4000,
     startBlock: 312087081,
     endBlock: 312187080,
     actionWhitelist: {
@@ -30,38 +32,40 @@ const abis = ['eosio', 'telos.evm', 'eosio.token'].map((abiFileNames) => {
     const jsonAbi = JSON.parse(readFileSync(`./${abiFileNames}.abi`).toString())
     return {account: jsonAbi.account_name, abi: ABI.from(jsonAbi.abi)};
 });
-await Promise.all(abis.map(abiInfo => reader.addContract(abiInfo.account, abiInfo.abi)));
 
-let pushed = 0;
-let lastLogTime = new Date().getTime() / 1000;
+reader.addContracts(abis);
+
 let lastPushed = options.startBlock - 1;
 let lastPushedTS = 'unknown';
+let totalRead = 0;
 let firstBlock = -1;
+let firstBlockTs: number;
 
 const statsTask = setInterval(() => {
-   const now = new Date().getTime() / 1000;
-   const delta = now - lastLogTime;
-   const speed = pushed / delta;
-   if (!reader.isShipAbiReady)
-       console.log(`ship abi not ready...`);
-   console.log(`${lastPushed} @ ${lastPushedTS}: ${speed.toFixed(2)} blocks/s`);
-   pushed = 0;
-   lastLogTime = now;
+   console.log(`${lastPushed} @ ${lastPushedTS}: ${reader.avgSpeed.toFixed(2)} blocks/s`);
 }, 1000);
 
 reader.events.on('block', async (block) => {
     const currentBlock = block.blockInfo.this_block.block_num;
 
-    if (firstBlock < 0) firstBlock = currentBlock;
+    if (firstBlock < 0) {
+        firstBlock = currentBlock;
+        firstBlockTs = performance.now();
+    }
 
     expect(currentBlock).to.be.equal(lastPushed + 1);
     lastPushed = block.blockInfo.this_block.block_num;
     lastPushedTS = block.blockHeader.timestamp;
-    pushed++;
+    totalRead++;
     reader.ack();
 });
 
 reader.events.on('stop', () => {
+    const elapsedMs = performance.now() - firstBlockTs;
+    const elapsedS = elapsedMs / 1000;
+    console.log(`elapsed sec: ${elapsedS}`);
+    console.log(`avg speed: ${(totalRead / elapsedS).toFixed(2)}`);
+
     if (options.startBlock > 0)
         expect(firstBlock, 'First block received mismatch!').to.be.equal(options.startBlock);
 

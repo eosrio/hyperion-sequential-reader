@@ -1,20 +1,26 @@
-import {parentPort, workerData} from "worker_threads";
-import {ABI, Serializer} from "@greymass/eosio";
 import * as console from "console";
-import {logLevelToInt} from "./utils.js";
+import * as process from "process";
 
-const contracts: Map<string, ABI> = new Map();
+import {ABI, Serializer} from "@greymass/eosio";
+import workerpool from "workerpool";
+
+import {logLevelToInt} from "./utils.js";
+import {MemoryBounds, SharedObjectStore} from "./shm.js";
+
+const logLevel = process.env.WORKER_LOG_LEVEL;
 
 function workerLog(level: string, message?: any, ...optionalParams: any[]): void {
-    if (logLevelToInt(workerData.logLevel) >= logLevelToInt(level)) {
+    if (logLevelToInt(logLevel) >= logLevelToInt(level)) {
         const timestampHeader = `[${(new Date()).toISOString().slice(0, -1)}]`;
-        const workerHeader = `[WORKER ${workerData.wIndex}]`;
+        const workerHeader = `[WORKERPOOL]`;
         const levelHeader = `[${level.toUpperCase()}]`;
         console.log([timestampHeader, workerHeader, levelHeader].join(''), message, ...optionalParams);
     }
 }
 
 export interface DSMessage {
+    shmRef: SharedArrayBuffer;
+    memMap: {[key: string]: MemoryBounds}
     index: number;  // action or delta index relative to block
     blockId: string;
     blockNum: number;
@@ -37,7 +43,7 @@ export interface ActionDSMessage extends DSMessage {
     }
 }
 
-export interface DeltaResponseDSMessage extends DSMessage {
+export interface DeltaDSResponse extends DSMessage {
     data: {
         code: string;
         table: string;
@@ -45,7 +51,7 @@ export interface DeltaResponseDSMessage extends DSMessage {
     }
 }
 
-export interface ActionResponseDSMessage extends DSMessage {
+export interface ActionDSResponse extends DSMessage {
     data: {
         account: string;
         name: string;
@@ -53,109 +59,59 @@ export interface ActionResponseDSMessage extends DSMessage {
     }
 }
 
-export interface ParentMessage {
-    abi?: {
-        account: string;
-        obj: ABI;
-    };
-    delta?: DeltaDSMessage;
-    action?: ActionDSMessage;
-}
-
-export interface WorkerMessage {
-    index: number;  // worker index
-    abi?: { account: string };
-    delta?: DeltaResponseDSMessage;
-    action?: ActionResponseDSMessage;
-}
-
-function processDelta(message: DeltaDSMessage): DeltaResponseDSMessage {
+function processDelta(message: DeltaDSMessage): DeltaDSResponse {
+    const contractStore = SharedObjectStore.fromMemoryMap<ABI.Def>(message.shmRef, message.memMap);
     const delta = message.data;
-    if (contracts.has(delta.code)) {
-        const abi = contracts.get(delta.code);
-        if (abi) {
-            const type = abi.tables.find(value => value.name === delta.table)?.type;
-            if (type) {
-                try {
-                    const dsValue = Serializer.decode({data: delta.value, type, abi});
-                    return {
-                        ...message,
-                        data: {
-                            ...message.data,
-                            value: Serializer.objectify(dsValue)
-                        }
-                    };
-
-                } catch (e) {
-                    workerLog('error', e.message, delta.code, delta.table);
+    const contract = contractStore.get(delta.code);
+    const abi = ABI.from(contract as ABI.Def);
+    const type = abi.tables.find(value => value.name === delta.table)?.type;
+    if (type) {
+        try {
+            const dsValue = Serializer.decode({data: delta.value, type, abi});
+            return {
+                ...message,
+                data: {
+                    ...message.data,
+                    value: Serializer.objectify(dsValue)
                 }
-            } else {
-                workerLog('error', `Missing ABI type for table ${delta.table} of ${delta.code}`);
-            }
+            };
+
+        } catch (e) {
+            workerLog('error', e.message, delta.code, delta.table);
         }
+    } else {
+        workerLog('error', `Missing ABI type for table ${delta.table} of ${delta.code}`);
     }
     // addToFailedDS(delta.code, message);
     throw new Error(`Failed to process delta ${delta.code}: ${JSON.stringify(message)}`);
 }
-
-function processAction(message: ActionDSMessage): ActionResponseDSMessage {
+function processAction(message: ActionDSMessage): ActionDSResponse {
+    const contractStore = SharedObjectStore.fromMemoryMap<ABI.Def>(message.shmRef, message.memMap);
     const action = message.data;
-    const abi = contracts.get(action.account);
-    if (abi) {
-        try {
-            const decodedActData = Serializer.decode({
-                data: action.data,
-                type: action.name,
-                ignoreInvalidUTF8: true,
-                abi
-            });
-            if (decodedActData) {
-                return {
-                    ...message,
-                    data: {
-                        ...message.data,
-                        data: decodedActData
-                    }
-                };
-            }
-        } catch (e) {
-            workerLog('error', e.message, message);
+    const contract = contractStore.get(action.account);
+    const abi = ABI.from(contract as ABI.Def);
+    try {
+        const decodedActData = Serializer.decode({
+            data: action.data,
+            type: action.name,
+            ignoreInvalidUTF8: true,
+            abi
+        });
+        if (decodedActData) {
+            return {
+                ...message,
+                data: {
+                    ...message.data,
+                    data: decodedActData
+                }
+            };
         }
+    } catch (e) {
+        workerLog('error', e.message, message);
     }
     throw new Error(`Failed to process action ${JSON.stringify(action)}`);
 }
 
-function processMessage(msg: ParentMessage) {
-    let response: WorkerMessage = {
-        index: workerData.wIndex
-    };
-    if (msg.abi) {
-        const abi = ABI.from(msg.abi.obj);
-        const account = msg.abi.account;
-        contracts.set(account, abi);
-
-        response.abi = {account: account};
-        workerLog('debug', `abi set for ${msg.abi.account}`);
-    }
-    if (msg.delta) {
-        response.delta = processDelta(msg.delta);
-        workerLog(
-            'debug',
-            `ds delta ${msg.delta.data.code}::${msg.delta.data.table} index: ${msg.delta.index} block_num: ${msg.delta.blockNum}`
-        );
-    }
-
-    if (msg.action) {
-        response.action = processAction(msg.action);
-        workerLog(
-            'debug',
-            `ds action ${msg.action.data.account}::${msg.action.data.name} index: ${msg.action.index} block_num: ${msg.action.blockNum}`
-        );
-    }
-
-    parentPort.postMessage(response);
-}
-
-parentPort.on("message", value => {
-    processMessage(value);
+workerpool.worker({
+    processDelta, processAction
 });
