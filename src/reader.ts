@@ -49,9 +49,6 @@ export class HyperionSequentialReader {
     private shipAbiReady = false;
     events = new EventEmitter();
 
-    private totalWorkerABILoaded = 0;
-    private targetWorkerABILoaded = 0;
-
     private dsPool: Pool;
 
     private sharedABIStore: SharedObjectStore<ABI.Def>;
@@ -210,10 +207,6 @@ export class HyperionSequentialReader {
         return this.shipAbiReady;
     }
 
-    get areWorkerAbisReady(): boolean {
-        return this.totalWorkerABILoaded == this.targetWorkerABILoaded;
-    }
-
     isActionRelevant(account: string, name: string): boolean {
         return (
             this.contracts.has(account) && (
@@ -272,15 +265,6 @@ export class HyperionSequentialReader {
             await this.api.v1.chain.get_block(this.endBlock);
 
         this.log('info', 'Node range check done!');
-
-        while(!this.areWorkerAbisReady) {
-            this.log(
-                'info',
-                `Waiting on worker abis to be set ${this.totalWorkerABILoaded}/${this.targetWorkerABILoaded}`
-            );
-            await sleep(1000);
-        }
-
         this.log('info', `Connecting to ${this.shipApi}...`);
         this.connecting = true;
 
