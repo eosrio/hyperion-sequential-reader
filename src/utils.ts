@@ -68,7 +68,7 @@ export class ThroughputMeasurer {
         value: number;
         time: number;
     }[] = [];
-    private maxValue: number = undefined;
+    private maxValue: number = 0;
     private _startTime: number = undefined;
 
     // have at max windowSize millisecond old measures
@@ -87,7 +87,7 @@ export class ThroughputMeasurer {
        if (this._startTime == undefined)
            this._startTime = now;
 
-       if (this.maxValue == undefined || value > this.maxValue)
+       if (value > this.maxValue)
            this.maxValue = value;
 
        while(now - this.measures[0].time > this.windowSizeMs)

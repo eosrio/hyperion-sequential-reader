@@ -36,7 +36,7 @@ export interface HyperionSequentialReaderOptions {
     tableWhitelist?: {[key: string]: string[]};   // key is code name, value is list of tables,
     speedMeasureConf?: {
         windowSizeMs: number;
-        stride: number;
+        deltaMs: number;
     };
 }
 
@@ -73,8 +73,9 @@ export class HyperionSequentialReader {
 
     perfMetrics: ThroughputMeasurer;
     readonly speedMeasureWindowSize: number;
-    readonly speedMeasureStride: number;
+    readonly speedMeasureDeltaMs: number;
     private blocksSinceLastMeasure: number = 0;
+    private _perfMetricTask;
 
     // block collector map
     blockCollector: Map<number, {
@@ -112,7 +113,7 @@ export class HyperionSequentialReader {
     onDisconnect: () => void = null;
     onError: (err) => void = null;
 
-    private _resumerTask: NodeJS.Timer;
+    private _resumerTask;
 
     constructor(private options: HyperionSequentialReaderOptions) {
 
@@ -164,16 +165,20 @@ export class HyperionSequentialReader {
         if (options.tableWhitelist)
             this.tableWhitelist = new Map(Object.entries(options.tableWhitelist));
 
-        this.speedMeasureStride = 1000;
+        this.speedMeasureDeltaMs = 1000;
         this.speedMeasureWindowSize = 10 * 1000;
         if (options.speedMeasureConf) {
             if (options.speedMeasureConf.windowSizeMs)
                 this.speedMeasureWindowSize = options.speedMeasureConf.windowSizeMs;
 
-            if (options.speedMeasureConf.stride)
-                this.speedMeasureStride = options.speedMeasureConf.stride;
+            if (options.speedMeasureConf.deltaMs)
+                this.speedMeasureDeltaMs = options.speedMeasureConf.deltaMs;
         }
         this.perfMetrics = new ThroughputMeasurer({windowSizeMs: this.speedMeasureWindowSize})
+        this._perfMetricTask = setInterval(() => {
+            this.perfMetrics.measure(this.blocksSinceLastMeasure);
+            this.blocksSinceLastMeasure = 0;
+        }, this.speedMeasureDeltaMs);
 
         // Initial Reading Queue
         this.inputQueue = cargo(async (tasks) => {
@@ -289,6 +294,7 @@ export class HyperionSequentialReader {
 
    async stop() {
         this.log('info', 'Stopping...');
+        clearInterval(this._perfMetricTask);
         clearInterval(this._resumerTask);
         this.ship.close();
         this.shipAbiReady = false;
@@ -682,12 +688,6 @@ export class HyperionSequentialReader {
 
         this.events.emit('block', block);
         this.blocksSinceLastMeasure++;
-
-        // Speed measurement sys
-        if (blockNum % this.speedMeasureStride == 0) {
-            this.perfMetrics.measure(this.blocksSinceLastMeasure);
-            this.blocksSinceLastMeasure = 0;
-        }
 
         if (blockNum == this.endBlock) {
             this.log('info', `Finished reading range ${this.startBlock} to ${this.endBlock}`);

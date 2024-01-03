@@ -8,11 +8,11 @@ import * as console from "console";
 const options = {
     shipApi: 'ws://127.0.0.1:29999',
     chainApi: 'http://127.0.0.1:8888',
-    poolSize: 8,
-    blockConcurrency: 8,
+    poolSize: 16,
+    blockConcurrency: 16,
     blockHistorySize: 1000,
-    inputQueueLimit: 2000,
-    outputQueueLimit: 2000,
+    inputQueueLimit: 8000,
+    outputQueueLimit: 8000,
     startBlock: 312087081,
     endBlock: 312187080,
     actionWhitelist: {
@@ -42,7 +42,7 @@ let firstBlock = -1;
 let firstBlockTs: number;
 
 const statsTask = setInterval(() => {
-    if (lastPushed >= options.startBlock && reader.perfMetrics.stats.measures > 0) {
+    if (lastPushed >= options.startBlock && reader.perfMetrics.max > 0) {
         const avgSpeed = reader.perfMetrics.average.toFixed(2).padStart(8, ' ');
         const maxSpeed = reader.perfMetrics.max.toFixed(2).padStart(8, ' ')
         console.log(`${lastPushed} @ ${lastPushedTS}: avg speed: ${avgSpeed} blocks/s | max speed: ${maxSpeed} blocks/s`);
