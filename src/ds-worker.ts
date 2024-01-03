@@ -102,7 +102,7 @@ function processAction(message: ActionDSMessage): ActionDSResponse {
                 ...message,
                 data: {
                     ...message.data,
-                    data: decodedActData
+                    data: Serializer.objectify(decodedActData)
                 }
             };
         }

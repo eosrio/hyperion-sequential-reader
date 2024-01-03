@@ -11,8 +11,8 @@ const options = {
     poolSize: 8,
     blockConcurrency: 8,
     blockHistorySize: 1000,
-    inputQueueLimit: 4000,
-    outputQueueLimit: 4000,
+    inputQueueLimit: 2000,
+    outputQueueLimit: 2000,
     startBlock: 312087081,
     endBlock: 312187080,
     actionWhitelist: {
@@ -42,7 +42,11 @@ let firstBlock = -1;
 let firstBlockTs: number;
 
 const statsTask = setInterval(() => {
-   console.log(`${lastPushed} @ ${lastPushedTS}: ${reader.avgSpeed.toFixed(2)} blocks/s`);
+    if (lastPushed >= options.startBlock && reader.perfMetrics.stats.measures > 0) {
+        const avgSpeed = reader.perfMetrics.average.toFixed(2).padStart(8, ' ');
+        const maxSpeed = reader.perfMetrics.max.toFixed(2).padStart(8, ' ')
+        console.log(`${lastPushed} @ ${lastPushedTS}: avg speed: ${avgSpeed} blocks/s | max speed: ${maxSpeed} blocks/s`);
+    }
 }, 1000);
 
 reader.events.on('block', async (block) => {

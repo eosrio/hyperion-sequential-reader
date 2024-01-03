@@ -7,7 +7,7 @@ import fetch from "node-fetch";
 import * as process from "process";
 import * as console from "console";
 
-import {addOnBlockToABI, logLevelToInt} from "./utils.js";
+import {addOnBlockToABI, logLevelToInt, ThroughputMeasurer} from "./utils.js";
 import {ActionDSMessage, ActionDSResponse, DeltaDSMessage, DeltaDSResponse} from "./ds-worker.js";
 import {SharedObject, SharedObjectStore} from "./shm.js";
 import {StateHistorySocket} from "./state-history.js";
@@ -35,7 +35,7 @@ export interface HyperionSequentialReaderOptions {
     actionWhitelist?: {[key: string]: string[]};  // key is code name, value is list of actions
     tableWhitelist?: {[key: string]: string[]};   // key is code name, value is list of tables,
     speedMeasureConf?: {
-        windowSize: number;
+        windowSizeMs: number;
         stride: number;
     };
 }
@@ -71,12 +71,10 @@ export class HyperionSequentialReader {
     private pendingAck = 0;
     private paused = false;
 
-    private emitedSinceLastMeasure: number = 0;
-    private speedMeasurements: [number, number][] = [];
-    private averageSpeed: number = 0;
-
-    private speedMeasureWindowSize: number;
-    private speedMeasureStride: number;
+    perfMetrics: ThroughputMeasurer;
+    readonly speedMeasureWindowSize: number;
+    readonly speedMeasureStride: number;
+    private blocksSinceLastMeasure: number = 0;
 
     // block collector map
     blockCollector: Map<number, {
@@ -167,14 +165,15 @@ export class HyperionSequentialReader {
             this.tableWhitelist = new Map(Object.entries(options.tableWhitelist));
 
         this.speedMeasureStride = 1000;
-        this.speedMeasureWindowSize = 5;
+        this.speedMeasureWindowSize = 10 * 1000;
         if (options.speedMeasureConf) {
-            if (options.speedMeasureConf.windowSize)
-                this.speedMeasureWindowSize = options.speedMeasureConf.windowSize;
+            if (options.speedMeasureConf.windowSizeMs)
+                this.speedMeasureWindowSize = options.speedMeasureConf.windowSizeMs;
 
             if (options.speedMeasureConf.stride)
                 this.speedMeasureStride = options.speedMeasureConf.stride;
         }
+        this.perfMetrics = new ThroughputMeasurer({windowSizeMs: this.speedMeasureWindowSize})
 
         // Initial Reading Queue
         this.inputQueue = cargo(async (tasks) => {
@@ -230,10 +229,6 @@ export class HyperionSequentialReader {
     log(level: string, message?: any, ...optionalParams: any[]): void {
         if (logLevelToInt(this.logLevel) >= logLevelToInt(level))
             console.log(`[${(new Date()).toISOString().slice(0, -1)}][READER][${level.toUpperCase()}]`, message, ...optionalParams);
-    }
-
-    get avgSpeed() {
-        return this.averageSpeed;
     }
 
     private async processInputQueue(tasks: any[]) {
@@ -677,16 +672,6 @@ export class HyperionSequentialReader {
         this.updateSharedABIStore();
     }
 
-    private calculateSpeed() {
-        const startTime = this.speedMeasurements[0][1];
-        const endTime = this.speedMeasurements[this.speedMeasurements.length - 1][1];
-        const msElapsed = endTime - startTime;
-        let totalEmitted = 0;
-        for (const [amount, ts] of this.speedMeasurements)
-            totalEmitted += amount;
-        this.averageSpeed = (totalEmitted / msElapsed) * 1000;
-    }
-
     private emitBlock(block) {
         delete block.ready;
         const blockNum = block.blockInfo.this_block.block_num;
@@ -696,17 +681,12 @@ export class HyperionSequentialReader {
             this.nextBlockRequested = 0;
 
         this.events.emit('block', block);
-        this.emitedSinceLastMeasure++;
+        this.blocksSinceLastMeasure++;
 
         // Speed measurement sys
         if (blockNum % this.speedMeasureStride == 0) {
-            this.speedMeasurements.push([this.emitedSinceLastMeasure, performance.now()])
-            if (this.speedMeasurements.length > this.speedMeasureWindowSize)
-                this.speedMeasurements.shift();
-
-            this.calculateSpeed();
-
-            this.emitedSinceLastMeasure = 0;
+            this.perfMetrics.measure(this.blocksSinceLastMeasure);
+            this.blocksSinceLastMeasure = 0;
         }
 
         if (blockNum == this.endBlock) {
