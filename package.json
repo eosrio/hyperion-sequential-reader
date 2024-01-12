@@ -1,7 +1,7 @@
 {
   "name": "@eosrio/hyperion-sequential-reader",
   "repository": "eosrio/hyperion-sequential-reader",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "",
   "main": "./lib/esm/index.js",
   "types": "./lib/esm/index.d.ts",
@@ -15,21 +15,27 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc && node scripts/create-dist-packages.mjs",
+    "build": "yarn && tsc && node scripts/create-dist-packages.mjs",
     "release": "npm run build && npm pack --pack-destination packages",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@greymass/eosio": "0.6.11",
+    "@greymass/eosio": "0.7.0",
     "async": "^3.2.4",
+    "bson": "^6.2.0",
+    "bufferutil": "^4.0.8",
     "node-fetch": "^3.3.0",
+    "shm-store": "^1.0.0-rc1",
+    "workerpool": "^9.0.4",
     "ws": "^8.13.0"
   },
   "devDependencies": {
+    "@types/chai": "^4.3.11",
     "@types/node": "^18.11.13",
     "@types/ws": "^8.5.4",
+    "chai": "^5.0.0",
     "nodemon": "^2.0.22",
     "tsx": "^3.12.7",
     "typescript": "^5.0.4"
