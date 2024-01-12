@@ -136,10 +136,10 @@
   resolved "https://registry.yarnpkg.com/@esbuild/win32-x64/-/win32-x64-0.17.18.tgz#3a8e57153905308db357fd02f57c180ee3a0a1fa"
   integrity sha512-qU25Ma1I3NqTSHJUOKi9sAH1/Mzuvlke0ioMJRthLXKm7JiSKVwFghlGbDLOO2sARECGhja4xYfRAZNPAkooYg==
 
-"@greymass/eosio@0.6.11":
-  version "0.6.11"
-  resolved "https://registry.npmjs.org/@greymass/eosio/-/eosio-0.6.11.tgz"
-  integrity sha512-Ud6V7+vQJ+OLxqD7QcKTv/ik/Hd5uaRHyGY9Hzc+cJXezYU4sADX4TyQ8sn6XIr8ebVVNZFvWpc5JR0a9lBzKw==
+"@greymass/eosio@0.7.0":
+  version "0.7.0"
+  resolved "https://registry.yarnpkg.com/@greymass/eosio/-/eosio-0.7.0.tgz#f68fa78112e205ac7e9baab7417c4e5da217f12d"
+  integrity sha512-eEFwzHPUO+WIIoEMHzaYPXLOklEKIXkjJFQ6iekfYzZ02eupW9RJdk8vr31u36TESVxKnmZ5Xnux613t+FNq2A==
   dependencies:
     bn.js "^4.11.9"
     brorand "^1.1.0"

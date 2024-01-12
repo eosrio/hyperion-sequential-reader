@@ -38,6 +38,7 @@ export interface HyperionSequentialReaderOptions {
         windowSizeMs: number;
         deltaMs: number;
     };
+    skipInitialBlockCheck?: boolean;
 }
 
 export class HyperionSequentialReader {
@@ -77,6 +78,8 @@ export class HyperionSequentialReader {
     private blocksSinceLastMeasure: number = 0;
     private _perfMetricTask;
 
+    private readonly skipInitialBlockCheck: boolean;
+
     // block collector map
     blockCollector: Map<number, {
         ready: boolean,
@@ -106,7 +109,7 @@ export class HyperionSequentialReader {
     private actionRefMap: Map<number, any> = new Map();
     private deltaRefMap: Map<string, any> = new Map();
     private lastEmittedBlock: number;
-    private nextBlockRequested = 0;
+    private nextBlockRequested: number;
     private irreversibleOnly: boolean;
 
     onConnected: () => void = null;
@@ -179,6 +182,8 @@ export class HyperionSequentialReader {
             this.perfMetrics.measure(this.blocksSinceLastMeasure);
             this.blocksSinceLastMeasure = 0;
         }, this.speedMeasureDeltaMs);
+
+        this.skipInitialBlockCheck = !!options.skipInitialBlockCheck;
 
         // Initial Reading Queue
         this.inputQueue = cargo(async (tasks) => {
@@ -255,14 +260,16 @@ export class HyperionSequentialReader {
         if (this.connecting)
             throw new Error('Reader already connecting');
 
-        // check if target node is up & contains requested range
-        await this.api.v1.chain.get_info();
+        if (!this.skipInitialBlockCheck) {
+            // check if target node is up & contains requested range
+            await this.api.v1.chain.get_info();
 
-        if (this.startBlock > 0)
-            await this.api.v1.chain.get_block(this.startBlock);
+            if (this.startBlock > 0)
+                await this.api.v1.chain.get_block(this.startBlock);
 
-        if (this.endBlock > 0)
-            await this.api.v1.chain.get_block(this.endBlock);
+            if (this.endBlock > 0)
+                await this.api.v1.chain.get_block(this.endBlock);
+        }
 
         this.log('info', 'Node range check done!');
         this.log('info', `Connecting to ${this.shipApi}...`);
@@ -309,11 +316,11 @@ export class HyperionSequentialReader {
         this.shipAbiReady = false;
         this.blockHistory.clear()
         this.blockCollector.clear()
-        setTimeout(() => {
+        setTimeout(async () => {
             this.reconnectCount++;
             this.startBlock = this.lastEmittedBlock + 1;
             this.nextBlockRequested = this.lastEmittedBlock;
-            this.start();
+            await this.start();
         }, ms);
     }
 
@@ -442,7 +449,7 @@ export class HyperionSequentialReader {
 
             const lastNonForked = blockNum - 1;
             this.lastEmittedBlock = this.lastEmittedBlock > lastNonForked ? lastNonForked : this.lastEmittedBlock;
-            this.nextBlockRequested = 0;
+            this.nextBlockRequested = this.lastEmittedBlock + 1;
         }
 
         this.blockHistory.add(blockNum);
@@ -684,8 +691,6 @@ export class HyperionSequentialReader {
         const blockNum = block.blockInfo.this_block.block_num;
         this.lastEmittedBlock = blockNum;
         this.blockCollector.delete(blockNum);
-        if (this.nextBlockRequested === blockNum)
-            this.nextBlockRequested = 0;
 
         this.events.emit('block', block);
         this.blocksSinceLastMeasure++;
