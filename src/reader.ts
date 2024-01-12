@@ -348,20 +348,21 @@ export class HyperionSequentialReader {
             case 'get_status_result_v0': {
                 const data = Serializer.objectify(result[1]) as any;
                 this.log('info', `Head block: ${data.head.block_num}`);
+                const beginShipState = data.chain_state_begin_block;
+                const endShipState = data.chain_state_end_block;
                 if (this.startBlock < 0) {
                     this.startBlock = (this.irreversibleOnly ? data.last_irreversible.block_num : data.head.block_num) + this.startBlock;
                 } else {
                     if (this.irreversibleOnly && this.startBlock > data.last_irreversible.block_num)
                         throw new Error(`irreversibleOnly true but startBlock > ship LIB`);
                 }
-                const beginShipState = data.chain_state_begin_block;
-                const endShipState = data.chain_state_end_block;
+                if (this.endBlock < 0)
+                    this.endBlock = 0xffffffff - 1;
+                else if (this.endBlock > endShipState)
+                    throw new Error(`End block ${this.endBlock} not in chain_state, end state: ${endShipState}`);
 
                 if (this.startBlock <= beginShipState)
                     throw new Error(`Start block ${this.startBlock} not in chain_state, begin state: ${beginShipState} (must be +1 to startBlock)`);
-
-                if (this.endBlock > endShipState)
-                    throw new Error(`End block ${this.endBlock} not in chain_state, end state: ${endShipState}`);
 
                 this.lastEmittedBlock = this.startBlock - 1;
                 this.nextBlockRequested = this.startBlock;
