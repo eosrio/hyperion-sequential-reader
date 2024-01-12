@@ -1,11 +1,12 @@
 import * as console from "console";
 import * as process from "process";
 
+
+import {SharedObjectStore, MemoryBounds} from "shm-store";
 import {ABI, Serializer} from "@greymass/eosio";
 import workerpool from "workerpool";
 
 import {logLevelToInt} from "./utils.js";
-import {MemoryBounds, SharedObjectStore} from "./shm.js";
 
 const logLevel = process.env.WORKER_LOG_LEVEL;
 

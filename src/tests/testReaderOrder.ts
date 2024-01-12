@@ -6,15 +6,15 @@ import {BSON} from "bson";
 import * as console from "console";
 
 const options = {
-    shipApi: 'ws://127.0.0.1:29999',
-    chainApi: 'http://127.0.0.1:8888',
+    shipApi: 'ws://127.0.0.1:11352',
+    chainApi: 'http://127.0.0.1:58294',
     poolSize: 16,
     blockConcurrency: 16,
     blockHistorySize: 1000,
     inputQueueLimit: 8000,
     outputQueueLimit: 8000,
-    startBlock: 312087081,
-    endBlock: 312187080,
+    startBlock: 320206990,
+    endBlock: -1,
     actionWhitelist: {
         'eosio.token': ['transfer'],
         'eosio.evm': ['raw', 'withdraw']

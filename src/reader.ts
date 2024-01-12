@@ -9,11 +9,11 @@ import * as console from "console";
 
 import {addOnBlockToABI, logLevelToInt, ThroughputMeasurer} from "./utils.js";
 import {ActionDSMessage, ActionDSResponse, DeltaDSMessage, DeltaDSResponse} from "./ds-worker.js";
-import {SharedObject, SharedObjectStore} from "./shm.js";
 import {StateHistorySocket} from "./state-history.js";
 import {OrderedSet} from "./orderedset.js";
 
 import {ABI, ABIDecoder, APIClient, Serializer} from "@greymass/eosio";
+import {SharedObject, SharedObjectStore} from "shm-store";
 import workerpool, {Pool} from "workerpool";
 
 const HIST_TIME = 15 * 60 * 2;  // 15 minutes in blocks
