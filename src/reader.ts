@@ -310,16 +310,22 @@ export class HyperionSequentialReader {
         await this.dsPool.terminate();
     }
 
-    restart(ms: number = 3000) {
+    restart(ms: number = 3000, forceBlock?: number) {
         this.log('info', 'Restarting...');
         this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear()
         this.blockCollector.clear()
+
+        // TODO:
+        // found block emission gap on translator, so add api to
+        // force a specific block to be the restart block, this is only
+        // a mitigation, needs to be investigated further
+        const restartBlock = forceBlock ? forceBlock : this.lastEmittedBlock + 1;
         setTimeout(async () => {
             this.reconnectCount++;
-            this.startBlock = this.lastEmittedBlock + 1;
-            this.nextBlockRequested = this.lastEmittedBlock;
+            this.startBlock = restartBlock;
+            this.nextBlockRequested = restartBlock - 1;
             await this.start();
         }, ms);
     }
