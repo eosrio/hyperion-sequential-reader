@@ -316,6 +316,8 @@ export class HyperionSequentialReader {
         this.shipAbiReady = false;
         this.blockHistory.clear()
         this.blockCollector.clear()
+        this.inputQueue.remove((node) => true);
+        this.decodingQueue.remove((node) => true);
 
         // TODO:
         // found block emission gap on translator, so add api to
@@ -327,6 +329,7 @@ export class HyperionSequentialReader {
             this.startBlock = restartBlock;
             this.nextBlockRequested = restartBlock - 1;
             await this.start();
+            this.events.emit('restarted');
         }, ms);
     }
 
@@ -369,10 +372,13 @@ export class HyperionSequentialReader {
                     if (this.irreversibleOnly && this.startBlock > data.last_irreversible.block_num)
                         throw new Error(`irreversibleOnly true but startBlock > ship LIB`);
                 }
-                if (this.endBlock < 0)
-                    this.endBlock = 0xffffffff - 1;
-                else if (this.endBlock > endShipState)
-                    throw new Error(`End block ${this.endBlock} not in chain_state, end state: ${endShipState}`);
+
+                // only care about end state if end block < 0 or end block is max posible
+                if (this.endBlock != 0xffffffff - 1)
+                    if (this.endBlock < 0)
+                        this.endBlock = 0xffffffff - 1;
+                    else if (this.endBlock > endShipState)
+                        throw new Error(`End block ${this.endBlock} not in chain_state, end state: ${endShipState}`);
 
                 if (this.startBlock <= beginShipState)
                     throw new Error(`Start block ${this.startBlock} not in chain_state, begin state: ${beginShipState} (must be +1 to startBlock)`);
