@@ -15,6 +15,7 @@ import {OrderedSet} from "./orderedset.js";
 import {ABI, ABIDecoder, APIClient, Serializer} from "@greymass/eosio";
 import {SharedObject, SharedObjectStore} from "shm-store";
 import workerpool, {Pool} from "workerpool";
+import {ActionTrace, DecodedBlock} from "./types/antelope.js";
 
 const HIST_TIME = 15 * 60 * 2;  // 15 minutes in blocks
 
@@ -54,7 +55,7 @@ export class HyperionSequentialReader {
 
     private sharedABIStore: SharedObjectStore<ABI.Def>;
 
-    private contracts: Map<string, ABI> = new Map();
+    private contracts: Map<string, ABI.Def> = new Map();
     private actionWhitelist: Map<string, string[]>;
     private tableWhitelist: Map<string, string[]>;
 
@@ -522,9 +523,9 @@ export class HyperionSequentialReader {
                                     return;
                                 console.time(`abiDecoding-${abiRow.name}-${blockNum}`);
                                 const abiBin = new Uint8Array(Buffer.from(abiRow.abi, 'hex'));
-                                const abi = ABI.fromABI(new ABIDecoder(abiBin));
-                                console.timeEnd(`abiDecoding-${abiRow.name}-${blockNum}`);
+                                const abi: ABI.Def = Serializer.objectify(ABI.fromABI(new ABIDecoder(abiBin)));
                                 this.addContract(abiRow.name, abi);
+                                console.timeEnd(`abiDecoding-${abiRow.name}-${blockNum}`);
                             }
                         });
                     }
@@ -584,7 +585,7 @@ export class HyperionSequentialReader {
                     const partialTransaction = rt.partial[1];
 
                     for (const at of rt.action_traces) {
-                        const actionTrace = at[1];
+                        const actionTrace: ActionTrace = at[1];
                         if (actionTrace.receipt === null) {
                             this.log('warning', `action trace with receipt null! maybe hard_fail'ed deferred tx? block: ${blockNum}`);
                             continue;
@@ -675,12 +676,12 @@ export class HyperionSequentialReader {
     private updateSharedABIStore() {
         const objectMap: {[keys: string]: SharedObject<ABI.Def>} = {};
         for (const [account, abi] of this.contracts.entries())
-            objectMap[account] = SharedObject.fromObject<ABI.Def>(abi.toJSON());
+            objectMap[account] = SharedObject.fromObject<ABI.Def>(abi);
 
         this.sharedABIStore = SharedObjectStore.fromObjects<ABI.Def>(objectMap);
     }
 
-    addContract(account: string, abi: ABI) {
+    addContract(account: string, abi: ABI.Def) {
         if (account == 'eosio')
             addOnBlockToABI(abi);
 
@@ -688,7 +689,7 @@ export class HyperionSequentialReader {
         this.updateSharedABIStore();
     }
 
-    addContracts(contracts: {account: string, abi: ABI}[]) {
+    addContracts(contracts: {account: string, abi: ABI.Def}[]) {
         for (const contract of contracts) {
             if (contract.account == 'eosio')
                 addOnBlockToABI(contract.abi);
@@ -704,7 +705,7 @@ export class HyperionSequentialReader {
         this.lastEmittedBlock = blockNum;
         this.blockCollector.delete(blockNum);
 
-        this.events.emit('block', block);
+        this.events.emit('block', block as DecodedBlock);
         this.blocksSinceLastMeasure++;
 
         if (blockNum == this.endBlock) {

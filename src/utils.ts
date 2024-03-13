@@ -16,7 +16,7 @@ const onblockAbiStruct: ABI.Struct = {
     ]
 };
 
-export function addOnBlockToABI(abi: ABI) {
+export function addOnBlockToABI(abi: ABI.Def) {
     abi.structs = [onblockAbiStruct, ...abi.structs];
     abi.actions = [onblockAbiAction, ...abi.actions];
 }
@@ -57,6 +57,13 @@ export function mergeDeep(target, ...sources) {
     return mergeDeep(target, ...sources);
 }
 
+import BN from "bn.js";
+
+export function repackBN(bn: Partial<BN>): BN {
+    const num = new BN();
+    mergeDeep(num, bn);
+    return num;
+}
 
 export interface ThroughputStats {
     measures: number;

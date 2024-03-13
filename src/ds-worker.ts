@@ -7,6 +7,7 @@ import {ABI, Serializer} from "@greymass/eosio";
 import workerpool from "workerpool";
 
 import {logLevelToInt} from "./utils.js";
+import {Action, DecodedAction} from "./types/antelope.js";
 
 const logLevel = process.env.WORKER_LOG_LEVEL;
 
@@ -37,11 +38,7 @@ export interface DeltaDSMessage extends DSMessage {
 }
 
 export interface ActionDSMessage extends DSMessage {
-    data: {
-        account: string;
-        name: string;
-        data: string;
-    }
+    data: Action;
 }
 
 export interface DeltaDSResponse extends DSMessage {
@@ -53,11 +50,7 @@ export interface DeltaDSResponse extends DSMessage {
 }
 
 export interface ActionDSResponse extends DSMessage {
-    data: {
-        account: string;
-        name: string;
-        data: any;
-    }
+    data: DecodedAction;
 }
 
 function processDelta(message: DeltaDSMessage): DeltaDSResponse {
@@ -65,7 +58,9 @@ function processDelta(message: DeltaDSMessage): DeltaDSResponse {
     const delta = message.data;
     const contract = contractStore.get(delta.code);
     const abi = ABI.from(contract as ABI.Def);
-    const type = abi.tables.find(value => value.name === delta.table)?.type;
+
+    const type = contract.tables.find(value => value.name === delta.table)?.type;
+
     if (type) {
         try {
             const dsValue = Serializer.decode({data: delta.value, type, abi});

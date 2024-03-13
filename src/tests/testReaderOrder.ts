@@ -1,25 +1,26 @@
 import {HyperionSequentialReader} from "../reader.js";
-import {ABI} from "@greymass/eosio";
 import {readFileSync} from "node:fs";
 import {expect} from 'chai';
-import {BSON} from "bson";
 import * as console from "console";
+import {DecodedBlock} from "../types/antelope.js";
 
 const options = {
-    shipApi: 'ws://127.0.0.1:11352',
-    chainApi: 'http://127.0.0.1:58294',
+    shipApi: 'ws://127.0.0.1:29999',
+    chainApi: 'http://127.0.0.1:8888',
     poolSize: 16,
     blockConcurrency: 16,
     blockHistorySize: 1000,
     inputQueueLimit: 8000,
     outputQueueLimit: 8000,
-    startBlock: 320206990,
+    startBlock: 180698860,
     endBlock: -1,
     actionWhitelist: {
         'eosio.token': ['transfer'],
         'eosio.evm': ['raw', 'withdraw']
     },
-    tableWhitelist: {},
+    tableWhitelist: {
+        'eosio.evm': ['account', 'accountstate']
+    },
     logLevel: 'info',
     // workerLogLevel: 'debug',
     maxPayloadMb: Math.floor(1024 * 1.5)
@@ -30,7 +31,7 @@ reader.onError = (err) => {throw err};
 
 const abis = ['eosio', 'telos.evm', 'eosio.token'].map((abiFileNames) => {
     const jsonAbi = JSON.parse(readFileSync(`./${abiFileNames}.abi`).toString())
-    return {account: jsonAbi.account_name, abi: ABI.from(jsonAbi.abi)};
+    return {account: jsonAbi.account_name, abi: jsonAbi.abi};
 });
 
 reader.addContracts(abis);
@@ -49,7 +50,7 @@ const statsTask = setInterval(() => {
     }
 }, 1000);
 
-reader.events.on('block', async (block) => {
+reader.events.on('block', async (block: DecodedBlock) => {
     const currentBlock = block.blockInfo.this_block.block_num;
 
     if (firstBlock < 0) {
