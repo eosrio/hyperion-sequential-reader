@@ -333,6 +333,11 @@ esbuild@~0.17.6:
     "@esbuild/win32-ia32" "0.17.18"
     "@esbuild/win32-x64" "0.17.18"
 
+fastpriorityqueue@^0.7.4:
+  version "0.7.4"
+  resolved "https://registry.yarnpkg.com/fastpriorityqueue/-/fastpriorityqueue-0.7.4.tgz#4286dfe26a4b5b81268f1778f3b52566c1599937"
+  integrity sha512-u7o5oa9R7CMOHo2i8P2/T2nRg5bg/0dDegDSJVzkVkMf/A318LNnujNLfpxlJeXUdDAefrVPqsDV624vUyxNfA==
+
 fetch-blob@^3.1.2, fetch-blob@^3.1.4:
   version "3.2.0"
   resolved "https://registry.npmjs.org/fetch-blob/-/fetch-blob-3.2.0.tgz"

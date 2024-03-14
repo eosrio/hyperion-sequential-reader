@@ -34,37 +34,6 @@ function isObject(item) {
     return (item && typeof item === 'object' && !Array.isArray(item));
 }
 
-/**
- * Deep merge two objects.
- * @param target
- * @param ...sources
- */
-export function mergeDeep(target, ...sources) {
-    if (!sources.length) return target;
-    const source = sources.shift();
-
-    if (isObject(target) && isObject(source)) {
-        for (const key in source) {
-            if (isObject(source[key])) {
-                if (!target[key]) Object.assign(target, { [key]: {} });
-                mergeDeep(target[key], source[key]);
-            } else {
-                Object.assign(target, { [key]: source[key] });
-            }
-        }
-    }
-
-    return mergeDeep(target, ...sources);
-}
-
-import BN from "bn.js";
-
-export function repackBN(bn: Partial<BN>): BN {
-    const num = new BN();
-    mergeDeep(num, bn);
-    return num;
-}
-
 export interface ThroughputStats {
     measures: number;
     elapsedMs?: number;
@@ -117,6 +86,10 @@ export class ThroughputMeasurer {
 
    get max() {
        return this.maxValue;
+   }
+
+   get last() {
+       return this.measures.at(-1).value;
    }
 
    get stats(): ThroughputStats  {

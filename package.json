@@ -1,7 +1,7 @@
 {
   "name": "@telosnetwork/hyperion-sequential-reader",
   "repository": "telosnetwork/hyperion-sequential-reader",
-  "version": "1.2.7-rc4",
+  "version": "1.2.7-rc5",
   "description": "",
   "main": "./lib/esm/index.js",
   "types": "./lib/esm/index.d.ts",
@@ -26,6 +26,7 @@
     "async": "^3.2.4",
     "bson": "^6.2.0",
     "bufferutil": "^4.0.8",
+    "fastpriorityqueue": "^0.7.4",
     "node-fetch": "^3.3.0",
     "shm-store": "^1.0.0-rc1",
     "workerpool": "^9.0.4",

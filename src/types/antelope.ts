@@ -113,9 +113,10 @@ export interface ActionWithExtras {
 
 
 export interface DecodedBlock {
+    blockNum: number;
     blockInfo: BlockInfo;
     blockHeader: BlockHeader;
     deltas: TableDelta[];
     actions: ActionWithExtras[];
-    proc_time_us: number
+    decodeElapsed: number
 }

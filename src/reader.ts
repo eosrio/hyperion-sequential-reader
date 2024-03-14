@@ -2,20 +2,21 @@ import {RawData} from "ws";
 import {EventEmitter} from "events";
 import * as path from "path";
 import {fileURLToPath} from "node:url";
-import {cargo, queue, QueueObject} from "async";
+import {queue, QueueObject} from "async";
 import fetch from "node-fetch";
 import * as process from "process";
 import * as console from "console";
 
 import {addOnBlockToABI, logLevelToInt, ThroughputMeasurer} from "./utils.js";
-import {ActionDSMessage, ActionDSResponse, DeltaDSMessage, DeltaDSResponse} from "./ds-worker.js";
+import {ActionDSMessage, ActionDSResponse, DeltaDSMessage, ShipDSMessage} from "./ds-worker.js";
 import {StateHistorySocket} from "./state-history.js";
 import {OrderedSet} from "./orderedset.js";
 
 import {ABI, ABIDecoder, APIClient, Serializer} from "@greymass/eosio";
 import {SharedObject, SharedObjectStore} from "shm-store";
-import workerpool, {Pool} from "workerpool";
-import {ActionTrace, DecodedBlock} from "./types/antelope.js";
+import workerpool, {Pool, Promise as PoolPromise} from "workerpool";
+import {ActionTrace, ActionWithExtras, DecodedAction, DecodedBlock, TableDelta} from "./types/antelope.js";
+import FastPriorityQueue from "fastpriorityqueue";
 
 const HIST_TIME = 15 * 60 * 2;  // 15 minutes in blocks
 
@@ -24,12 +25,11 @@ export interface HyperionSequentialReaderOptions {
     chainApi: string;
     poolSize: number;
     irreversibleOnly?: boolean;
+    maxMessagesInFlight?: number;
     blockConcurrency?: number;
     blockHistorySize?: number;
     startBlock?: number;
     endBlock?: number;
-    inputQueueLimit?: number;
-    outputQueueLimit?: number;
     logLevel?: string;
     workerLogLevel?: string;
     maxPayloadMb?: number;
@@ -47,6 +47,8 @@ export class HyperionSequentialReader {
     max_payload_mb: number;
     reconnectCount = 0;
     private connecting = false;
+    private forked: boolean = false;
+    private lastFork: number;
     private shipAbi?: ABI;
     private shipAbiReady = false;
     events = new EventEmitter();
@@ -62,16 +64,10 @@ export class HyperionSequentialReader {
     startBlock: number;
     endBlock: number;
 
-    // queues
-    maxMessagesInFlight = 50;
-    inputQueueLimit = 200;
-    outputQueueLimit = 1000;
     blockConcurrency: number;
-    inputQueue: QueueObject<any>;
     decodingQueue: QueueObject<any>;
 
-    private pendingAck = 0;
-    private paused = false;
+    maxMessagesInFlight: number;
 
     perfMetrics: ThroughputMeasurer;
     readonly speedMeasureWindowSize: number;
@@ -81,43 +77,26 @@ export class HyperionSequentialReader {
 
     private readonly skipInitialBlockCheck: boolean;
 
-    // block collector map
-    blockCollector: Map<number, {
-        ready: boolean,
-        blockInfo: any,
-        blockHeader: any,
-        counters: {
-            actions: number,
-            deltas: number
-        },
-        createdAt?: bigint,
-        proc_time_us?: number,
-        targets: {
-            actions: number,
-            deltas: number
-        }
-        actions: any[],
-        deltas: any[]
-    }> = new Map();
+    blockCollector: FastPriorityQueue<DecodedBlock> = new FastPriorityQueue(
+        (a: DecodedBlock, b: DecodedBlock) => a.blockNum < b.blockNum
+    );
 
     blockHistory: OrderedSet<number>;
     blockHistorySize: number;
     logLevel: string;
 
     api: APIClient;
+
     shipApi: string;
-    // abiRequests: Record<string, boolean> = {};
-    private actionRefMap: Map<number, any> = new Map();
-    private deltaRefMap: Map<string, any> = new Map();
+
+    // last block emitted to user
     private lastEmittedBlock: number;
-    private nextBlockRequested: number;
+
     private irreversibleOnly: boolean;
 
     onConnected: () => void = null;
     onDisconnect: () => void = null;
     onError: (err) => void = null;
-
-    private _resumerTask;
 
     constructor(private options: HyperionSequentialReaderOptions) {
 
@@ -146,22 +125,10 @@ export class HyperionSequentialReader {
 
         this.startBlock = options.startBlock || -1;
         this.lastEmittedBlock = this.startBlock - 1;
-        this.nextBlockRequested = this.startBlock;
         this.endBlock = options.endBlock || -1;
 
-        if (!options.endBlock && !options.startBlock) {
-            this.blockConcurrency = 1;
-        } else {
-            this.blockConcurrency = options.blockConcurrency || 5;
-        }
-
-        if (options.inputQueueLimit) {
-            this.inputQueueLimit = options.inputQueueLimit;
-        }
-
-        if (options.outputQueueLimit) {
-            this.outputQueueLimit = options.outputQueueLimit;
-        }
+        this.blockConcurrency = options.blockConcurrency || 2;
+        this.maxMessagesInFlight = options.maxMessagesInFlight || 1000;
 
         if (options.actionWhitelist)
             this.actionWhitelist = new Map(Object.entries(options.actionWhitelist));
@@ -186,31 +153,8 @@ export class HyperionSequentialReader {
 
         this.skipInitialBlockCheck = !!options.skipInitialBlockCheck;
 
-        // Initial Reading Queue
-        this.inputQueue = cargo(async (tasks) => {
-            try {
-                await this.processInputQueue(tasks);
-            } catch (e) {
-                this.log('error', e);
-                process.exit();
-            }
-        }, this.maxMessagesInFlight);
-
-        // Parallel Decoding Queue
-        this.decodingQueue = queue(async (task) => {
-            await this.decodeShipData(task);
-            // readerLog(`[${blockNum}] Decoding Queue: ${this.decodingQueue.length()} | Paused: ${this.paused}`);
-            if ((this.decodingQueue.length() < this.inputQueueLimit && this.blockCollector.size < this.outputQueueLimit) && this.paused) {
-                this.resumeReading();
-            }
-        }, this.blockConcurrency);
-
-        // Check if output queue is whitin limits
-        this._resumerTask = setInterval(() => {
-            if (this.blockCollector.size < this.outputQueueLimit && this.paused) {
-                this.resumeReading();
-            }
-        }, 1000);
+        this.decodingQueue = queue(
+            this.decodeShipData.bind(this), this.blockConcurrency);
     }
 
     get isShipAbiReady(): boolean {
@@ -240,21 +184,6 @@ export class HyperionSequentialReader {
     log(level: string, message?: any, ...optionalParams: any[]): void {
         if (logLevelToInt(this.logLevel) >= logLevelToInt(level))
             console.log(`[${(new Date()).toISOString().slice(0, -1)}][READER][${level.toUpperCase()}]`, message, ...optionalParams);
-    }
-
-    private async processInputQueue(tasks: any[]) {
-        // this.log('info', `Tasks: ${tasks.length} | Decoding Queue: ${this.decodingQueue.length()}`);
-        for (const task of tasks) {
-            this.decodingQueue.push(task, null);
-        }
-        if ((this.decodingQueue.length() > this.inputQueueLimit || this.blockCollector.size >= this.outputQueueLimit) && !this.paused) {
-            this.paused = true;
-            this.pendingAck = tasks.length;
-            this.inputQueue.pause();
-            this.log('info', 'Reader paused!');
-        } else {
-            this.ackBlockRange(tasks.length);
-        }
     }
 
     async start() {
@@ -303,11 +232,11 @@ export class HyperionSequentialReader {
    async stop() {
         this.log('info', 'Stopping...');
         clearInterval(this._perfMetricTask);
-        clearInterval(this._resumerTask);
         this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear();
-        this.blockCollector.clear();
+        this.blockCollector.removeMany(b => true);
+        this.blockCollector.trim();
         await this.dsPool.terminate();
     }
 
@@ -316,9 +245,9 @@ export class HyperionSequentialReader {
         this.ship.close();
         this.shipAbiReady = false;
         this.blockHistory.clear()
-        this.blockCollector.clear()
-        this.inputQueue.remove((node) => true);
-        this.decodingQueue.remove((node) => true);
+        this.blockCollector.removeMany(b => true);
+        this.blockCollector.trim();
+        this.decodingQueue.remove(task => true);
 
         // TODO:
         // found block emission gap on translator, so add api to
@@ -328,7 +257,6 @@ export class HyperionSequentialReader {
         setTimeout(async () => {
             this.reconnectCount++;
             this.startBlock = restartBlock;
-            this.nextBlockRequested = restartBlock - 1;
             await this.start();
             this.events.emit('restarted');
         }, ms);
@@ -355,7 +283,7 @@ export class HyperionSequentialReader {
         switch (result[0]) {
             case 'get_blocks_result_v0': {
                 try {
-                    this.inputQueue.push(result[1], null);
+                    this.decodingQueue.push(result[1], null);
                 } catch (e) {
                     this.log('error', '[decodeShipData]', e.message);
                     this.log('error', e);
@@ -385,11 +313,7 @@ export class HyperionSequentialReader {
                     throw new Error(`Start block ${this.startBlock} not in chain_state, begin state: ${beginShipState} (must be +1 to startBlock)`);
 
                 this.lastEmittedBlock = this.startBlock - 1;
-                this.nextBlockRequested = this.startBlock;
-                this.requestBlocks({
-                    from: this.startBlock,
-                    to: this.endBlock
-                });
+                this.requestBlocks(this.startBlock, this.endBlock);
                 break;
             }
         }
@@ -399,16 +323,17 @@ export class HyperionSequentialReader {
         this.log('info', `loading ship abi of size: ${data.length}`)
         const abi = JSON.parse(data.toString());
         this.shipAbi = ABI.from(abi);
+        this.addContract('shipAbi', abi);
         this.shipAbiReady = true;
         this.send(['get_status_request_v0', {}]);
         this.ackBlockRange(1);
     }
 
-    private requestBlocks(param: { from: number; to: number }) {
-        this.log('info', `Requesting blocks from ${param.from} to ${param.to}`);
+    private requestBlocks(from: number = -1, to: number = 0xffffffff) {
+        this.log('info', `Requesting blocks from ${from} to ${to}`);
         this.send(['get_blocks_request_v0', {
-            start_block_num: param.from > 0 ? param.from - 1 : -1,
-            end_block_num: param.to > 0 ? param.to + 1 : 0xffffffff,
+            start_block_num: from - 1,
+            end_block_num: to,
             max_messages_in_flight: this.maxMessagesInFlight,
             have_positions: [],
             irreversible_only: this.irreversibleOnly,
@@ -419,6 +344,7 @@ export class HyperionSequentialReader {
     }
 
     private async decodeShipData(resultElement: any) {
+        const startDecodeTime = performance.now();
         const blockInfo = Serializer.objectify({
             head: resultElement.head,
             last_irreversible: resultElement.last_irreversible,
@@ -426,11 +352,16 @@ export class HyperionSequentialReader {
             prev_block: resultElement.prev_block
         });
 
+        const blockNum = blockInfo.this_block.block_num;
+
+        if (blockNum < this.startBlock) {
+            this.log('warning', `received block (${blockNum}) which is < startBlock (${this.startBlock})... skip...`);
+            return;
+        }
+
+        const blockId = blockInfo.this_block.block_id;
         const prevBlockNum = blockInfo.prev_block.block_num;
         const prevBlockId = blockInfo.prev_block.block_id;
-
-        const blockNum = blockInfo.this_block.block_num;
-        const blockId = blockInfo.this_block.block_id;
 
         this.log('debug', '[decodeShipData]:');
         this.log('debug', `prev: #${prevBlockNum} - ${prevBlockId}`);
@@ -438,17 +369,23 @@ export class HyperionSequentialReader {
 
         // fork handling;
         if (this.blockHistory.has(blockNum)) {
-            let i = blockNum;
+            this.forked = true;
             this.log('debug', 'FORK detected!');
+            this.lastFork = blockNum;
             this.log('debug', 'blockHistory last 40 values before handling:');
             this.log('debug', this.blockHistory.queue.slice(-40));
 
-            this.log('debug', `purging block collector from ${i}`);
+            this.log('debug', `purging block collector from ${blockNum}`);
 
-            while(this.blockCollector.delete(i))
-                i++;
+            let higestCleaned = blockNum;
+            this.blockCollector.removeMany(b => {
+                const thisNum = b.blockInfo.this_block.block_num;
+                if (thisNum > higestCleaned)
+                    higestCleaned = thisNum;
+                return thisNum >= blockNum;
+            });
 
-            this.log('debug', `done, purged up to ${i}`);
+            this.log('debug', `done, purged up to ${higestCleaned}`);
             this.log('debug', `purging block history from ${blockNum}`);
 
             this.blockHistory.deleteFrom(blockNum);
@@ -462,18 +399,24 @@ export class HyperionSequentialReader {
 
             const lastNonForked = blockNum - 1;
             this.lastEmittedBlock = this.lastEmittedBlock > lastNonForked ? lastNonForked : this.lastEmittedBlock;
-            this.nextBlockRequested = this.lastEmittedBlock + 1;
+            this.forked = false;
         }
+
+        if (this.forked && blockNum > this.lastFork)
+            return;
 
         this.blockHistory.add(blockNum);
 
         if (resultElement.block && blockNum) {
 
-            const block = Serializer.decode({
+            const blockDecodeParams: ShipDSMessage = {
+                shmRef: this.sharedABIStore.sharedMem,
+                memMap: this.sharedABIStore.getMemoryMap(),
+                blockId, blockNum,
                 type: 'signed_block',
-                data: resultElement.block.array as Uint8Array,
-                abi: this.shipAbi
-            }) as any;
+                data: resultElement.block.array as Uint8Array
+            };
+            const block = await this.dsPool.exec('decodeShip', [blockDecodeParams]);
 
             const blockHeader = Serializer.objectify({
                 timestamp: block.timestamp,
@@ -489,14 +432,16 @@ export class HyperionSequentialReader {
                 block_extensions: block.block_extensions,
             });
 
-            const extendedDeltas = [];
+            const workerTasks: PoolPromise<any, any>[] = [];
+            const deltas: TableDelta[] = [];
+            const actions: ActionWithExtras[] = [];
+
             if (resultElement.deltas) {
                 const deltaArrays = Serializer.decode({
                     type: 'table_delta[]',
                     data: resultElement.deltas.array as Uint8Array,
                     abi: this.shipAbi
                 }) as any[];
-
 
                 // process deltas
                 for (let deltaArray of deltaArrays) {
@@ -532,131 +477,109 @@ export class HyperionSequentialReader {
 
 
                     if (deltaArray[1].name === 'contract_row') {
-                        deltaArray[1].rows.forEach((row: any, index: number) => {
+                        deltaArray[1].rows.forEach(row => {
                             const deltaRow = Serializer.decode({
                                 data: row.data.array,
                                 type: 'contract_row',
                                 abi: this.shipAbi
                             })[1];
-                            const deltaObj = Serializer.objectify(deltaRow);
-                            if (this.isDeltaRelevant(deltaObj.code, deltaObj.table)) {
-                                const extDelta = {
-                                    present: row.present,
-                                    ...deltaObj
-                                };
-                                const key = `${blockNum}:${index}`;
-                                this.deltaRefMap.set(key, extDelta);
-                                extendedDeltas.push(this.deltaRefMap.get(key));
-                                const deltaDSParams: DeltaDSMessage = {
-                                    shmRef: this.sharedABIStore.sharedMem,
-                                    memMap: this.sharedABIStore.getMemoryMap(),
-                                    index, blockId, blockNum,
-                                    data: extDelta
-                                };
-                                this.dsPool.exec('processDelta', [deltaDSParams]).then((delta: DeltaDSResponse) => {
-                                    this.collectDelta(delta);
-                                }).catch((error) => {
-                                    this.log('error', 'processDelta call errored out!');
-                                    this.log('error', error.message);
-                                    this.log('error', error.stack);
-                                    throw new Error(error);
-                                });
-                            }
+                            const delta: TableDelta = Serializer.objectify(deltaRow);
+                            if (!this.isDeltaRelevant(delta.code, delta.table))
+                                return;
+
+                            const deltaDSParams: DeltaDSMessage = {
+                                shmRef: this.sharedABIStore.sharedMem,
+                                memMap: this.sharedABIStore.getMemoryMap(),
+                                blockId, blockNum,
+                                data: delta
+                            };
+                            workerTasks.push(
+                                this.dsPool.exec(
+                                    'processDelta', [deltaDSParams]
+                                ).then(delta => deltas.push(delta))
+                            );
                         });
                     }
                 }
             }
 
-            const extendedActions = [];
             if (resultElement.traces) {
                 const traces = Serializer.decode({
                     type: 'transaction_trace[]',
                     data: resultElement.traces.array as Uint8Array,
                     abi: this.shipAbi,
                     ignoreInvalidUTF8: true
-                }) as any[];
+                }) as [string, any][];
 
-                // process traces
-                for (let trace of traces) {
+                const relevantTraces: [any, ActionTrace, string[]][] = []
+                traces.forEach((trace: [string, any]) => {
                     const rt = Serializer.objectify(trace[1]);
                     if (!rt.partial || rt.partial.length < 2)
-                        continue;
+                        return;
 
-                    const partialTransaction = rt.partial[1];
+                    const signatures: string[] = rt.partial[1].signatures;
 
-                    for (const at of rt.action_traces) {
-                        const actionTrace: ActionTrace = at[1];
+                    for (const [dType, actionTrace] of rt.action_traces as [string, ActionTrace][]) {
                         if (actionTrace.receipt === null) {
                             this.log('warning', `action trace with receipt null! maybe hard_fail'ed deferred tx? block: ${blockNum}`);
                             continue;
                         }
-                        if (this.isActionRelevant(actionTrace.act.account, actionTrace.act.name))  {
-                            const abiActionNames = [];
-                            this.contracts.get(actionTrace.act.account).actions.forEach((obj) => {
-                                abiActionNames.push(obj.name.toString());
-                            });
-                            if (!abiActionNames.includes(actionTrace.act.name)) {
-                                this.log(
-                                    'warning',
-                                    `action ${actionTrace.act.name} not found in ${actionTrace.act.account}'s abi, ignoring tx ${rt.id}...`);
-                                continue;
-                            }
-                            const gs = actionTrace.receipt[1].global_sequence;
-                            const extAction = {
+                        if (this.isActionRelevant(actionTrace.act.account, actionTrace.act.name))
+                            relevantTraces.push([rt, actionTrace, signatures]);
+                    }
+                });
+
+                relevantTraces.forEach((actionData: [any, ActionTrace, string[]]) => {
+                    const [trace, actionTrace, signatures] = actionData;
+                    const abiActionNames = this.contracts.get(actionTrace.act.account).actions.map(a => a.name);
+                    if (!abiActionNames.includes(actionTrace.act.name)) {
+                        this.log(
+                            'warning',
+                            `action ${actionTrace.act.name} not found in ${actionTrace.act.account}'s abi, ignoring tx ${trace.id}...`);
+                        return;
+                    }
+                    const actionDSParams: ActionDSMessage = {
+                        shmRef: this.sharedABIStore.sharedMem,
+                        memMap: this.sharedABIStore.getMemoryMap(),
+                        blockId, blockNum,
+                        data: actionTrace.act
+                    };
+                    workerTasks.push(
+                        this.dsPool.exec(
+                            'processAction', [actionDSParams]
+                        ).then((decodedAct: ActionDSResponse) => {
+                            actions.push({
                                 actionOrdinal: actionTrace.action_ordinal,
                                 creatorActionOrdinal: actionTrace.creator_action_ordinal,
-                                trxId: rt.id,
-                                cpu: rt.cpu_usage_us,
-                                net: rt.net_usage_words,
+                                trxId: trace.id,
+                                cpu: trace.cpu_usage_us,
+                                net: trace.net_usage_words,
                                 ram: actionTrace.account_ram_deltas,
                                 receipt: actionTrace.receipt[1],
                                 receiver: actionTrace.receiver,
                                 console: actionTrace.console,
-                                signatures: partialTransaction.signatures,
-                                act: actionTrace.act
-                            };
-                            this.actionRefMap.set(gs, extAction);
-                            extendedActions.push(this.actionRefMap.get(gs));
-                            const actionDSParams: ActionDSMessage = {
-                                shmRef: this.sharedABIStore.sharedMem,
-                                memMap: this.sharedABIStore.getMemoryMap(),
-                                index: gs, blockId, blockNum,
-                                data: actionTrace.act
-                            };
-                            this.dsPool.exec('processAction', [actionDSParams]).then((action: ActionDSResponse) => {
-                                this.collectAction(action);
-                            }).catch((error) => {
-                                this.log('error', 'process callAction errored out!');
-                                this.log('error', error.message);
-                                this.log('error', error.stack);
-                                throw new Error(error);
+                                signatures: signatures,
+                                act: decodedAct.data
                             });
-                        }
-                    }
-                }
+                        })
+                    );
+                });
             }
 
-            const nBlock = {
-                ready: false,
-                blockInfo,
-                blockHeader,
-                counters: {
-                    actions: 0,
-                    deltas: 0
-                },
-                targets: {
-                    actions: extendedActions.length,
-                    deltas: extendedDeltas.length,
-                },
-                deltas: extendedDeltas,
-                actions: extendedActions,
-                createdAt: process.hrtime.bigint()
-            };
+            await Promise.all(workerTasks);
 
-            this.blockCollector.set(blockNum, nBlock);
+            if (this.forked && blockNum > this.lastFork)
+                return;
 
-            if (extendedDeltas.length == 0 && extendedActions.length == 0)
-                this.checkBlock(nBlock);
+            const decodeElapsed: number = performance.now() - startDecodeTime;
+
+            this.blockCollector.add({
+                blockNum, blockInfo, blockHeader,
+                deltas, actions,
+                decodeElapsed
+            })
+
+            this.maybeEmitBlock();
         }
     }
 
@@ -699,90 +622,27 @@ export class HyperionSequentialReader {
         this.updateSharedABIStore();
     }
 
-    private emitBlock(block) {
-        delete block.ready;
-        const blockNum = block.blockInfo.this_block.block_num;
-        this.lastEmittedBlock = blockNum;
-        this.blockCollector.delete(blockNum);
+    private maybeEmitBlock() {
+        if (this.blockCollector.isEmpty())
+            return;
 
-        this.events.emit('block', block as DecodedBlock);
+        const topBlock = this.blockCollector.peek();
+
+        if (topBlock.blockNum != this.lastEmittedBlock + 1)
+            return;
+
+        this.events.emit('block', this.blockCollector.poll())
+        this.lastEmittedBlock = topBlock.blockNum;
         this.blocksSinceLastMeasure++;
 
-        if (blockNum == this.endBlock) {
+        if (topBlock.blockNum == this.endBlock) {
             this.log('info', `Finished reading range ${this.startBlock} to ${this.endBlock}`);
             this.stop().then(() => this.events.emit('stop'));
         }
     }
 
-    ack() {
-        const nextBlock = this.blockCollector.get(this.lastEmittedBlock + 1);
-        if (nextBlock && nextBlock.ready)
-            this.emitBlock(nextBlock);
-
-        else
-            this.nextBlockRequested = this.lastEmittedBlock + 1;
-    }
-
-    private collectAction(action: ActionDSResponse) {
-        const refAction = this.actionRefMap.get(action.index);
-        refAction.act.data = action.data.data;
-        const block = this.blockCollector.get(action.blockNum);
-        if (!block) {
-            this.log('warning', 'collect delta called but block is undefined');
-            return;
-        }
-        const blockId = block.blockInfo.this_block.block_id;
-        if (blockId != action.blockId) {
-            this.log(
-                'warning',
-                `discarding data due to fork on block #${action.blockNum}, data id: ${action.blockId}, collector id: ${blockId}`);
-            return
-        }
-
-        block.counters.actions++;
-        this.actionRefMap.delete(action.index);
-        this.checkBlock(block);
-    }
-
-    private collectDelta(delta: DeltaDSResponse) {
-        const key = `${delta.blockNum}:${delta.index}`;
-        const refDelta = this.deltaRefMap.get(key);
-        refDelta.value = delta.data.value;
-        const block = this.blockCollector.get(delta.blockNum);
-        if (!block) {
-            this.log('warning', 'collect delta called but block is undefined');
-            return;
-        }
-        const blockId = block.blockInfo.this_block.block_id;
-        if (blockId != delta.blockId) {
-            this.log(
-                'warning',
-                `discarding data due to fork on block #${delta.blockNum}, data id: ${delta.blockId}, collector id: ${blockId}`);
-            return
-        }
-        block.counters.deltas++;
-        this.deltaRefMap.delete(key);
-        this.checkBlock(block);
-    }
-
-    private checkBlock(block) {
-        if (block.counters.actions === block.targets.actions && block.counters.deltas === block.targets.deltas) {
-            const elapsed = process.hrtime.bigint() - block.createdAt;
-            block.proc_time_us = Number(elapsed / BigInt(1000));
-            delete block.createdAt;
-            delete block.counters;
-            delete block.targets;
-            block.ready = true;
-            // check if this block can be emitted directly
-            if (this.nextBlockRequested === block.blockInfo.this_block.block_num)
-                this.emitBlock(block);
-        }
-    }
-
-    private resumeReading() {
-        this.inputQueue.resume();
-        this.paused = false;
-        this.ackBlockRange(this.pendingAck);
-        this.log('info', 'Reader resumed!');
+    ack(range: number = 1) {
+        this.maybeEmitBlock();
+        this.ackBlockRange(range);
     }
 }

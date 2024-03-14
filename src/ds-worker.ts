@@ -7,7 +7,7 @@ import {ABI, Serializer} from "@greymass/eosio";
 import workerpool from "workerpool";
 
 import {logLevelToInt} from "./utils.js";
-import {Action, DecodedAction} from "./types/antelope.js";
+import {Action, DecodedAction, TableDelta} from "./types/antelope.js";
 
 const logLevel = process.env.WORKER_LOG_LEVEL;
 
@@ -23,18 +23,18 @@ function workerLog(level: string, message?: any, ...optionalParams: any[]): void
 export interface DSMessage {
     shmRef: SharedArrayBuffer;
     memMap: {[key: string]: MemoryBounds}
-    index: number;  // action or delta index relative to block
     blockId: string;
     blockNum: number;
     data: any;
 }
 
+export interface ShipDSMessage extends DSMessage {
+    type: string;
+    data: string | Uint8Array;
+}
+
 export interface DeltaDSMessage extends DSMessage {
-    data: {
-        code: string;
-        table: string;
-        value: string;
-    }
+    data: TableDelta;
 }
 
 export interface ActionDSMessage extends DSMessage {
@@ -51,6 +51,21 @@ export interface DeltaDSResponse extends DSMessage {
 
 export interface ActionDSResponse extends DSMessage {
     data: DecodedAction;
+}
+
+function decodeShip(message: ShipDSMessage): DSMessage {
+    const contractStore = SharedObjectStore.fromMemoryMap<ABI.Def>(message.shmRef, message.memMap);
+    const data = message.data;
+    const contract = contractStore.get('shipAbi');
+    const abi = ABI.from(contract as ABI.Def);
+    return {
+        ...message,
+        data: Serializer.decode({
+            type: message.type,
+            data: message.data,
+            abi
+        })
+    };
 }
 
 function processDelta(message: DeltaDSMessage): DeltaDSResponse {
@@ -109,5 +124,5 @@ function processAction(message: ActionDSMessage): ActionDSResponse {
 }
 
 workerpool.worker({
-    processDelta, processAction
+    decodeShip, processDelta, processAction
 });

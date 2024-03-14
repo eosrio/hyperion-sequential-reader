@@ -1,17 +1,16 @@
-import {HyperionSequentialReader} from "../reader.js";
+import {HyperionSequentialReader, HyperionSequentialReaderOptions} from "../reader.js";
 import {readFileSync} from "node:fs";
 import {expect} from 'chai';
 import * as console from "console";
 import {DecodedBlock} from "../types/antelope.js";
 
-const options = {
+const options: HyperionSequentialReaderOptions = {
     shipApi: 'ws://127.0.0.1:29999',
     chainApi: 'http://127.0.0.1:8888',
     poolSize: 16,
-    blockConcurrency: 16,
+    maxMessagesInFlight: 1000,
+    blockConcurrency: 64,
     blockHistorySize: 1000,
-    inputQueueLimit: 8000,
-    outputQueueLimit: 8000,
     startBlock: 180698860,
     endBlock: -1,
     actionWhitelist: {
@@ -44,9 +43,10 @@ let firstBlockTs: number;
 
 const statsTask = setInterval(() => {
     if (lastPushed >= options.startBlock && reader.perfMetrics.max > 0) {
+        const lstSpeed = reader.perfMetrics.last.toFixed(2).padStart(8, '')
         const avgSpeed = reader.perfMetrics.average.toFixed(2).padStart(8, ' ');
         const maxSpeed = reader.perfMetrics.max.toFixed(2).padStart(8, ' ')
-        console.log(`${lastPushed} @ ${lastPushedTS}: avg speed: ${avgSpeed} blocks/s | max speed: ${maxSpeed} blocks/s`);
+        console.log(`${lastPushed} @ ${lastPushedTS}: last speed: ${lstSpeed} blocks/s | avg speed: ${avgSpeed} blocks/s | max speed: ${maxSpeed} blocks/s`);
     }
 }, 1000);
 
