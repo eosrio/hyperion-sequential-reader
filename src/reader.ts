@@ -33,6 +33,7 @@ export interface HyperionSequentialReaderOptions {
     logLevel?: string;
     workerLogLevel?: string;
     maxPayloadMb?: number;
+    maxMsgsInFlight?: number;
     actionWhitelist?: {[key: string]: string[]};  // key is code name, value is list of actions
     tableWhitelist?: {[key: string]: string[]};   // key is code name, value is list of tables,
     speedMeasureConf?: {
@@ -45,6 +46,7 @@ export interface HyperionSequentialReaderOptions {
 export class HyperionSequentialReader {
     ship: StateHistorySocket;
     max_payload_mb: number;
+    maxMsgsInFlight: number;
     reconnectCount = 0;
     private connecting = false;
     private shipAbi?: ABI;
@@ -63,7 +65,6 @@ export class HyperionSequentialReader {
     endBlock: number;
 
     // queues
-    maxMessagesInFlight = 50;
     inputQueueLimit = 200;
     outputQueueLimit = 1000;
     blockConcurrency: number;
@@ -124,6 +125,7 @@ export class HyperionSequentialReader {
         this.logLevel = options.logLevel || 'warning';
         this.shipApi = options.shipApi;
         this.max_payload_mb = options.maxPayloadMb || 256;
+        this.maxMsgsInFlight = options.maxMsgsInFlight || 100;
         this.ship = new StateHistorySocket(this.shipApi, this.max_payload_mb);
 
         this.blockHistorySize = options.blockHistorySize || HIST_TIME;
@@ -194,7 +196,7 @@ export class HyperionSequentialReader {
                 this.log('error', e);
                 process.exit();
             }
-        }, this.maxMessagesInFlight);
+        }, this.maxMsgsInFlight);
 
         // Parallel Decoding Queue
         this.decodingQueue = queue(async (task) => {
@@ -409,7 +411,7 @@ export class HyperionSequentialReader {
         this.send(['get_blocks_request_v0', {
             start_block_num: param.from > 0 ? param.from - 1 : -1,
             end_block_num: param.to > 0 ? param.to + 1 : 0xffffffff,
-            max_messages_in_flight: this.maxMessagesInFlight,
+            max_messages_in_flight: this.maxMsgsInFlight,
             have_positions: [],
             irreversible_only: this.irreversibleOnly,
             fetch_block: true,
